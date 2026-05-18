@@ -1,3 +1,5 @@
+import os
+import time
 from typing import Optional
 
 import chainlit as cl
@@ -7,6 +9,9 @@ from data_layer import SQLiteDataLayer
 from pipeline.orchestrator import run as orchestrator_run
 
 cl_data._data_layer = SQLiteDataLayer("/data/threads.db")
+
+EXPORT_DIR = "/data/exports"
+os.makedirs(EXPORT_DIR, exist_ok=True)
 
 
 @cl.header_auth_callback
@@ -52,12 +57,10 @@ async def on_export_xlsx(action: cl.Action):
 
     title = cl.user_session.get("last_question", "Export")
     xlsx_bytes = to_xlsx(df, title=title)
-    file_el = cl.File(
-        name="export.xlsx",
-        content=xlsx_bytes,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        display="inline",
-    )
+    path = os.path.join(EXPORT_DIR, f"export_{int(time.time())}.xlsx")
+    with open(path, "wb") as f:
+        f.write(xlsx_bytes)
+    file_el = cl.File(name="export.xlsx", path=path, display="inline")
     await cl.Message(content="📥 **XLSX export ready:**", elements=[file_el]).send()
 
 
@@ -73,12 +76,10 @@ async def on_export_pdf(action: cl.Action):
 
     title = cl.user_session.get("last_question", "Export")
     pdf_bytes = to_pdf(df, title=title)
-    file_el = cl.File(
-        name="export.pdf",
-        content=pdf_bytes,
-        mime="application/pdf",
-        display="inline",
-    )
+    path = os.path.join(EXPORT_DIR, f"export_{int(time.time())}.pdf")
+    with open(path, "wb") as f:
+        f.write(pdf_bytes)
+    file_el = cl.File(name="export.pdf", path=path, display="inline")
     await cl.Message(content="📥 **PDF export ready:**", elements=[file_el]).send()
 
 
