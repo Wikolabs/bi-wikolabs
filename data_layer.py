@@ -15,6 +15,20 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _serialize_step_field(value) -> str:
+    """Convert step input/output to a plain string for storage.
+
+    - dict/list → JSON string
+    - str → stored as-is (no double encoding)
+    - anything else → str()
+    """
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, default=str)
+    if isinstance(value, str):
+        return value
+    return str(value) if value is not None else ""
+
+
 class SQLiteDataLayer(BaseDataLayer):
     def __init__(self, db_path: str = "/data/threads.db"):
         self.db_path = db_path
@@ -269,8 +283,8 @@ class SQLiteDataLayer(BaseDataLayer):
                     step_dict.get("threadId"),
                     step_dict.get("type"),
                     step_dict.get("name"),
-                    json.dumps(step_dict.get("input", "")),
-                    json.dumps(step_dict.get("output", "")),
+                    _serialize_step_field(step_dict.get("input", "")),
+                    _serialize_step_field(step_dict.get("output", "")),
                     json.dumps(step_dict.get("metadata", {})),
                     1 if step_dict.get("isError") else 0,
                     step_dict.get("createdAt", now),
