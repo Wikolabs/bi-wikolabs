@@ -1,4 +1,5 @@
 import json
+from typing import Optional
 import chainlit as cl
 import chainlit.data as cl_data
 from data_layer import SQLiteDataLayer
@@ -6,6 +7,12 @@ from agent import run_bi_agent, format_answer
 from pipelines import match_pipeline
 
 cl_data._data_layer = SQLiteDataLayer("/data/threads.db")
+
+
+@cl.header_auth_callback
+def header_auth_callback(headers: dict) -> Optional[cl.User]:
+    # Auto-login every visitor as the shared demo user
+    return cl.User(identifier="demo", metadata={"name": "Demo Analyst"})
 
 WELCOME = """# 📊 BI Wikolabs — Enterprise Intelligence Agent
 
