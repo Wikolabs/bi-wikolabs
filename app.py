@@ -1,7 +1,7 @@
 import json
 import chainlit as cl
-from agent import run_bi_agent
-from pipelines import match_pipeline, format_answer
+from agent import run_bi_agent, format_answer
+from pipelines import match_pipeline
 
 WELCOME = """# 📊 BI Wikolabs — Enterprise Intelligence Agent
 
