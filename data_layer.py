@@ -204,7 +204,11 @@ class SQLiteDataLayer(BaseDataLayer):
             )
         return PaginatedResponse(
             data=threads,
-            pageInfo={"hasNextPage": has_next, "endCursor": rows[-1]["id"] if rows else None},
+            pageInfo={
+                "hasNextPage": has_next,
+                "startCursor": rows[0]["id"] if rows else None,
+                "endCursor": rows[-1]["id"] if rows else None,
+            },
         )
 
     async def get_thread(self, thread_id: str) -> Optional[ThreadDict]:
