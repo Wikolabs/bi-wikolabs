@@ -144,11 +144,14 @@ async def generate(
         temperature=0,
         max_tokens=1024,
     )
-    raw = resp.choices[0].message.content.strip()
+    raw = (resp.choices[0].message.content or "").strip()
 
     # Strip markdown fences
     match = re.search(r"\{.*\}", raw, re.DOTALL)
     if match:
         raw = match.group()
 
-    return json.loads(raw)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"MQL generator returned unparseable response: {raw[:200]}") from exc

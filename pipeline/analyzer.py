@@ -45,7 +45,7 @@ async def analyze(question: str) -> dict:
         temperature=0,
         max_tokens=256,
     )
-    raw = resp.choices[0].message.content.strip()
+    raw = (resp.choices[0].message.content or "").strip()
 
     # Extract JSON from response (strip markdown fences if present)
     match = re.search(r"\{.*\}", raw, re.DOTALL)

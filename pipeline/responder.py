@@ -48,7 +48,7 @@ async def respond(
         temperature=0.3,
         max_tokens=1500,
     )
-    narrative = resp.choices[0].message.content.strip()
+    narrative = (resp.choices[0].message.content or "*(No narrative generated)*").strip()
 
     if not results:
         return narrative, None, None
