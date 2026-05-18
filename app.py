@@ -1,6 +1,3 @@
-import io
-import tempfile
-import os
 from typing import Optional
 
 import chainlit as cl
@@ -55,23 +52,13 @@ async def on_export_xlsx(action: cl.Action):
 
     title = cl.user_session.get("last_question", "Export")
     xlsx_bytes = to_xlsx(df, title=title)
-
-    # Write to a temp file so Chainlit can serve it
-    tmp = tempfile.NamedTemporaryFile(
-        delete=False, suffix=".xlsx", prefix="bi_export_"
+    file_el = cl.File(
+        name="export.xlsx",
+        content=xlsx_bytes,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        display="inline",
     )
-    try:
-        tmp.write(xlsx_bytes)
-        tmp.flush()
-        tmp.close()
-        file_el = cl.File(name="export.xlsx", path=tmp.name, display="inline")
-        await cl.Message(content="📥 **XLSX export ready:**", elements=[file_el]).send()
-    finally:
-        # Clean up after send (Chainlit copies the file)
-        try:
-            os.unlink(tmp.name)
-        except OSError:
-            pass
+    await cl.Message(content="📥 **XLSX export ready:**", elements=[file_el]).send()
 
 
 @cl.action_callback("export_pdf")
@@ -86,21 +73,13 @@ async def on_export_pdf(action: cl.Action):
 
     title = cl.user_session.get("last_question", "Export")
     pdf_bytes = to_pdf(df, title=title)
-
-    tmp = tempfile.NamedTemporaryFile(
-        delete=False, suffix=".pdf", prefix="bi_export_"
+    file_el = cl.File(
+        name="export.pdf",
+        content=pdf_bytes,
+        mime="application/pdf",
+        display="inline",
     )
-    try:
-        tmp.write(pdf_bytes)
-        tmp.flush()
-        tmp.close()
-        file_el = cl.File(name="export.pdf", path=tmp.name, display="inline")
-        await cl.Message(content="📥 **PDF export ready:**", elements=[file_el]).send()
-    finally:
-        try:
-            os.unlink(tmp.name)
-        except OSError:
-            pass
+    await cl.Message(content="📥 **PDF export ready:**", elements=[file_el]).send()
 
 
 @cl.on_message

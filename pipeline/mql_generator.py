@@ -96,6 +96,7 @@ def _build_system_prompt(collections: list, entity_map: dict, query_type: str) -
         "- Use $lookup to join collections when needed",
         "- For date formatting use $dateToString with format '%Y-%m'",
         "- Do NOT use JavaScript ISODate() — use plain ISO strings for $match date filters",
+        "- In $project, ALWAYS rename _id to a meaningful field (e.g. region, segment, category, month) — never leave _id unnamed or set to 0 without renaming it first",
         "- Return ONLY valid JSON, no explanation, no markdown fences",
         "",
         "OUTPUT FORMAT (aggregation):",
