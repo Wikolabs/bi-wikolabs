@@ -29,6 +29,41 @@ def _extract_json(text: str) -> dict:
     return json.loads(text.strip())
 
 
+SMALL_TALK_PROMPT = """You are a classifier. Reply with exactly one word: SMALLTALK or BUSINESS.
+
+SMALLTALK: greetings, thanks, how are you, who are you, what can you do, general chat.
+BUSINESS: any question about data, sales, revenue, products, customers, employees, finance, analytics.
+
+No explanation. One word only."""
+
+GREETING_RESPONSE = """👋 Hello! I'm **BI Wikolabs**, your enterprise analytics assistant.
+
+I can answer business questions by querying your MongoDB database in real time. Here's what I can analyze:
+
+| Domain | Examples |
+|---|---|
+| 💰 Sales & Revenue | Monthly trends, regional performance, order values |
+| 📦 Products | Top sellers, margins, inventory, categories |
+| 👥 Customers | Segments (Enterprise/SMB/Individual), lifetime value |
+| 👔 HR & Employees | Headcount, payroll, performance by department |
+| 💳 Finance | Cash flow, expense breakdown, transaction status |
+
+**Try asking:**
+- *"What are the top 5 products by revenue?"*
+- *"Show monthly cash flow for the last year"*
+- *"Which customer segment is most profitable?"*
+
+What would you like to explore? 📊"""
+
+
+def is_small_talk(question: str) -> bool:
+    result = _llm([
+        {"role": "system", "content": SMALL_TALK_PROMPT},
+        {"role": "user", "content": question},
+    ], temperature=0, max_tokens=5)
+    return "SMALLTALK" in result.upper()
+
+
 def generate_query(question: str) -> dict:
     content = _llm([
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -72,6 +107,8 @@ def format_answer(question: str, results: list) -> str:
 
 
 def run_bi_agent(question: str) -> tuple:
+    if is_small_talk(question):
+        return GREETING_RESPONSE, None
     spec = generate_query(question)
     results = execute_query(spec)
     answer = format_answer(question, results)

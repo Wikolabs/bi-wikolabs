@@ -43,19 +43,30 @@ async def start():
 async def main(message: cl.Message):
     question = message.content.strip()
 
-    async with cl.Step(name="🔍 Generating MongoDB query...") as step:
-        try:
-            pipeline_fn = match_pipeline(question)
-            if pipeline_fn:
+    pipeline_fn = match_pipeline(question)
+
+    if pipeline_fn:
+        async with cl.Step(name="🔍 Running pre-built pipeline...") as step:
+            try:
                 results = pipeline_fn()
-                spec = {"pipeline": "pre-built", "name": pipeline_fn.__name__}
                 answer = format_answer(question, results)
-            else:
+                step.output = f"```\nPipeline: {pipeline_fn.__name__} — {len(results)} records\n```"
+            except Exception as e:
+                step.output = f"Error: {e}"
+                await cl.Message(content=f"❌ **Error:** {e}").send()
+                return
+    else:
+        async with cl.Step(name="🔍 Generating MongoDB query...") as step:
+            try:
                 answer, spec = run_bi_agent(question)
-            step.output = f"```json\n{json.dumps(spec, indent=2, default=str)}\n```"
-        except Exception as e:
-            step.output = f"Error: {e}"
-            await cl.Message(content=f"❌ **Error:** {e}").send()
-            return
+                if spec:
+                    step.output = f"```json\n{json.dumps(spec, indent=2, default=str)}\n```"
+                else:
+                    step.is_error = False
+                    step.output = ""
+            except Exception as e:
+                step.output = f"Error: {e}"
+                await cl.Message(content=f"❌ **Error:** {e}").send()
+                return
 
     await cl.Message(content=answer).send()

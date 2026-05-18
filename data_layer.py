@@ -235,13 +235,16 @@ class SQLiteDataLayer(BaseDataLayer):
                 {
                     "id": s["id"],
                     "threadId": thread_id,
-                    "type": s["type"],
-                    "name": s["name"],
-                    "input": s["input"],
-                    "output": s["output"],
-                    "metadata": json.loads(s["metadata"]),
+                    "parentId": None,
+                    "type": s["type"] or "undefined",
+                    "name": s["name"] or "",
+                    "input": s["input"] or "",
+                    "output": s["output"] or "",
+                    "metadata": json.loads(s["metadata"] or "{}"),
                     "createdAt": s["created_at"],
                     "isError": bool(s["is_error"]),
+                    "streaming": False,
+                    "tags": [],
                 }
                 for s in steps
             ],
