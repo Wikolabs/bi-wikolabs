@@ -1,0 +1,37 @@
+name: Deploy BI Wikolabs
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: root
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            APP_DIR=/opt/bi-wikolabs
+
+            if [ ! -d "$APP_DIR/.git" ]; then
+              git clone https://github.com/Wikolabs/bi-wikolabs.git $APP_DIR
+            fi
+
+            cd $APP_DIR
+            git pull origin main
+
+            echo "GROQ_API_KEY=${{ secrets.GROQ_API_KEY }}" > .env
+            echo "MONGODB_URI=mongodb://mongo:27017" >> .env
+
+            docker compose up -d --build
+
+            sleep 8
+            docker compose exec -T app python seed.py || true
+
+            echo "Deployment complete."
