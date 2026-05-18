@@ -34,6 +34,7 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+      - app_data:/srv/app_data:ro
     networks:
       - bi_net
 

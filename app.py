@@ -11,6 +11,7 @@ from pipeline.orchestrator import run as orchestrator_run
 cl_data._data_layer = SQLiteDataLayer("/data/threads.db")
 
 EXPORT_DIR = "/data/exports"
+BASE_URL = "https://bi.wikolabs.com/exports"
 os.makedirs(EXPORT_DIR, exist_ok=True)
 
 
@@ -57,11 +58,12 @@ async def on_export_xlsx(action: cl.Action):
 
     title = cl.user_session.get("last_question", "Export")
     xlsx_bytes = to_xlsx(df, title=title)
-    path = os.path.join(EXPORT_DIR, f"export_{int(time.time())}.xlsx")
+    filename = f"export_{int(time.time())}.xlsx"
+    path = os.path.join(EXPORT_DIR, filename)
     with open(path, "wb") as f:
         f.write(xlsx_bytes)
-    file_el = cl.File(name="export.xlsx", path=path, display="inline")
-    await cl.Message(content="📥 **XLSX export ready:**", elements=[file_el]).send()
+    url = f"{BASE_URL}/{filename}"
+    await cl.Message(content=f"📥 **[Download XLSX]({url})**").send()
 
 
 @cl.action_callback("export_pdf")
@@ -76,11 +78,12 @@ async def on_export_pdf(action: cl.Action):
 
     title = cl.user_session.get("last_question", "Export")
     pdf_bytes = to_pdf(df, title=title)
-    path = os.path.join(EXPORT_DIR, f"export_{int(time.time())}.pdf")
+    filename = f"export_{int(time.time())}.pdf"
+    path = os.path.join(EXPORT_DIR, filename)
     with open(path, "wb") as f:
         f.write(pdf_bytes)
-    file_el = cl.File(name="export.pdf", path=path, display="inline")
-    await cl.Message(content="📥 **PDF export ready:**", elements=[file_el]).send()
+    url = f"{BASE_URL}/{filename}"
+    await cl.Message(content=f"📥 **[Download PDF]({url})**").send()
 
 
 @cl.on_message

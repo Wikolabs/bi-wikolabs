@@ -1,3 +1,11 @@
 bi.wikolabs.com {
-    reverse_proxy app:8000
+    # Serve exported files directly (no auth needed — UUIDs provide obscurity)
+    handle /exports/* {
+        root * /srv/app_data
+        file_server
+    }
+
+    handle {
+        reverse_proxy app:8000
+    }
 }
