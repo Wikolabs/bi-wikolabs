@@ -13,6 +13,7 @@ services:
     env_file: .env
     environment:
       - MONGODB_URI=mongodb://mongo:27017
+      - CHAINLIT_AUTH_SECRET
     ports:
       - "8000:8000"
     volumes:
