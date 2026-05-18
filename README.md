@@ -1,0 +1,645 @@
+# BI Wikolabs — Enterprise AI Business Intelligence Agent
+
+An enterprise-grade **natural language BI chatbot** powered by Groq LLM and MongoDB. Ask business questions in plain English and get instant insights, charts, and exportable reports — no SQL or query language needed.
+
+**Live demo:** [bi.wikolabs.com](https://bi.wikolabs.com)
+
+---
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [6-Step Query Pipeline](#6-step-query-pipeline)
+- [Technology Stack](#technology-stack)
+- [Data Model](#data-model)
+- [Project Structure](#project-structure)
+- [Getting Started (Local Development)](#getting-started-local-development)
+- [Deployment with Docker](#deployment-with-docker)
+- [CI/CD — GitHub Actions](#cicd--github-actions)
+- [GitHub Secrets Reference](#github-secrets-reference)
+- [Environment Variables](#environment-variables)
+- [Example Queries](#example-queries)
+- [Export Features](#export-features)
+- [Contributing & Developer Onboarding](#contributing--developer-onboarding)
+
+---
+
+## Overview
+
+BI Wikolabs translates natural language questions into MongoDB aggregation pipelines, executes them with automatic error correction, and returns business narratives with interactive Plotly charts — all within a Chainlit chat interface.
+
+**Key capabilities:**
+- Natural language → MongoDB query (MQL) generation
+- Compound question decomposition ("Show revenue AND top products")
+- Root-cause drill-down for WHY questions
+- Entity name resolution to ObjectIds (resolves "Acme Corp" → `ObjectId("...")`)
+- Self-correcting queries (retry with error feedback, up to 3 attempts)
+- Export results as Excel (.xlsx) or PDF
+- Chat history persisted locally via SQLite
+
+---
+
+## Architecture
+
+```mermaid
+flowchart TD
+    UI["Chainlit Chat UI\n(app.py)"]
+    ORCH["Pipeline Orchestrator\n(pipeline/orchestrator.py)"]
+    S0["Step 0 — Compound Question Decomposition"]
+    S1["Step 1 — Query Analysis\nclassify + extract entities"]
+    S2["Step 2 — Entity Resolution\nname → ObjectId"]
+    S3["Step 3 — Collection Selection"]
+    S4["Step 4 — MQL Generation\nwith schemas + examples"]
+    S5["Step 5 — Execute + Auto-Retry\nmax 3 attempts"]
+    S6["Step 6 — Narrative + Chart + DataFrame"]
+    OUT1["Chainlit message\nnarrative + chart"]
+    OUT2["Export XLSX / PDF\n(exporter.py)"]
+
+    UI -->|user message| ORCH
+    ORCH --> S0 --> S1
+    S1 --> S2 & S3
+    S2 & S3 --> S4 --> S5 --> S6
+    S6 --> OUT1
+    S6 --> OUT2
+```
+
+### Infrastructure (Docker Compose)
+
+```mermaid
+flowchart TD
+    Internet[":80 / :443\n(public)"]
+    Caddy["Caddy 2\nreverse proxy + static file server\nserves /exports/* from app_data volume"]
+    App["Chainlit app:8000\nPython app\nwrites exports to /data/exports/"]
+    MongoDB["MongoDB 7\nmongo:27017\nbi_wikolabs — 7 collections"]
+
+    Internet --> Caddy
+    Caddy -->|"proxy to :8000"| App
+    App -->|pymongo| MongoDB
+```
+
+---
+
+## 6-Step Query Pipeline
+
+The pipeline is the core of the system. Each step is a focused LLM call or database operation.
+
+### Step 0 — Compound Question Decomposition (`pipeline/orchestrator.py`)
+
+Detects compound questions using regex patterns ("and also", "as well as", "both X and Y") and asks the LLM to split them into independent sub-questions. All sub-questions run in parallel and results are merged.
+
+### Step 1 — Query Analysis (`pipeline/analyzer.py`)
+
+**Model:** `llama-3.1-8b-instant` (fast, low-latency)
+
+Classifies the question and extracts named entities in a single LLM call.
+
+| Output field | Description |
+|---|---|
+| `query_type` | `smalltalk` / `lookup` / `list` / `metric` / `ranking` / `comparison` |
+| `is_why_question` | `true` if the user wants a root-cause explanation |
+| `intent` | One-line description of what the user wants |
+| `entities` | List of `{type, value}` named entities found in the question |
+
+If `query_type` is `smalltalk`, the pipeline stops here and returns a greeting.
+
+### Step 2 — Entity Resolution (`pipeline/entity_resolver.py`) ← parallel
+
+Converts entity names to MongoDB ObjectIds via case-insensitive regex search across collections (`customers`, `employees`, `products`, `contacts`, `suppliers`). Prevents fragile name-based queries by resolving to authoritative IDs.
+
+### Step 3 — Collection Selection (`pipeline/collection_selector.py`) ← parallel
+
+Selects the 1–3 most relevant MongoDB collections for the query. Uses an LLM call with dynamic schema summaries (falls back to keyword matching if LLM fails).
+
+> Steps 2 and 3 run **concurrently** — saving ~500ms per query.
+
+### Step 4 — MQL Generation (`pipeline/mql_generator.py`)
+
+**Model:** `llama-3.3-70b-versatile` (highest reasoning quality)
+
+Generates a valid MongoDB query JSON given the question, entity map, collection schemas, and few-shot examples. Outputs:
+
+```json
+{
+  "collection": "orders",
+  "operation": "aggregate",
+  "pipeline": [ ... ]
+}
+```
+
+Supports `{"$oid": "..."}` syntax for ObjectIds, which are auto-converted to BSON at execution time.
+
+### Step 5 — Execute & Auto-Retry (`pipeline/executor.py`)
+
+Runs the generated query against MongoDB. On failure, feeds the error message back to Step 4 for automatic self-correction (up to 3 retries).
+
+### Step 6 — Response Generation (`pipeline/responder.py`)
+
+**Model:** `llama-3.3-70b-versatile`
+
+1. Builds a Pandas DataFrame from results
+2. Generates a business narrative (LLM)
+3. Selects the appropriate Plotly chart type:
+   - **Pie**: 2–10 category comparisons
+   - **Horizontal bar**: Rankings
+   - **Vertical bar / Grouped bar**: Lists and multi-metric comparisons
+4. If `is_why_question = true`, triggers a second MQL query for root-cause drill-down
+
+**Total LLM calls per query:** 3 minimum (analyze + generate + respond), 4 if collection selection uses LLM.
+
+---
+
+## Technology Stack
+
+| Layer | Technology | Role |
+|---|---|---|
+| Chat UI | [Chainlit](https://docs.chainlit.io/) ≥ 1.0 | Python-native chat framework, streaming, file uploads |
+| LLM Provider | [Groq](https://groq.com/) | Ultra-fast inference for llama-3.x models |
+| LLM Models | `llama-3.3-70b-versatile`, `llama-3.1-8b-instant` | High-quality reasoning + fast classification |
+| Database | MongoDB 7 | Document store for all business data |
+| ODM / Driver | pymongo ≥ 4.8 | MongoDB Python driver |
+| Data Processing | Pandas ≥ 2.0 | DataFrame manipulation and analysis |
+| Charts | Plotly ≥ 5.0 | Interactive charts in Chainlit |
+| Chat Persistence | SQLite (via `data_layer.py`) | Local thread + message history |
+| Excel Export | openpyxl ≥ 3.1 | `.xlsx` file generation |
+| PDF Export | fpdf2 ≥ 2.7 | Landscape PDF reports |
+| Demo Data | Faker ≥ 24.0 | Realistic synthetic data generation |
+| Container | Docker + Docker Compose | Service orchestration |
+| Reverse Proxy | Caddy 2 | TLS termination + static file serving |
+| CI/CD | GitHub Actions | Auto-deploy on push to `main` |
+
+---
+
+## Data Model
+
+The database is `bi_wikolabs` in MongoDB, containing 7 collections with ObjectId-based foreign keys.
+
+### Collections
+
+#### `customers` (80 documents)
+| Field | Type | Notes |
+|---|---|---|
+| `name` | String | Company name |
+| `industry` | String | Technology, Finance, Healthcare, … |
+| `segment` | String | `Enterprise` / `SMB` / `Individual` |
+| `region` | String | North, South, East, West, International |
+| `country` | String | |
+| `account_manager_id` | ObjectId | → `employees._id` |
+| `status` | String | `active` / `inactive` / `churned` |
+| `annual_revenue` | Number | |
+| `lifetime_value` | Number | |
+| `registration_date` | Date | |
+| `is_active` | Boolean | |
+
+#### `contacts` (30+ documents)
+| Field | Type | Notes |
+|---|---|---|
+| `name` | String | |
+| `title` | String | CEO, CTO, CFO, VP Sales, … |
+| `email` | String | |
+| `phone` | String | |
+| `company_id` | ObjectId | → `customers._id` |
+| `company_name` | String | Denormalized for convenience |
+| `is_primary` | Boolean | Primary contact for the company |
+| `last_contact_date` | Date | |
+
+#### `employees` (48 documents)
+| Field | Type | Notes |
+|---|---|---|
+| `name` | String | |
+| `department` | String | Sales, Engineering, Finance, Marketing, HR, Operations |
+| `role` | String | |
+| `salary` | Number | |
+| `hire_date` | Date | |
+| `manager_id` | ObjectId | → `employees._id` (self-reference) |
+| `performance_score` | Number | 1.0–5.0 |
+| `is_active` | Boolean | |
+| `quota` | Number | Sales quota (Sales dept only) |
+| `quota_attainment` | Number | % of quota achieved |
+
+#### `products` (26 documents)
+| Field | Type | Notes |
+|---|---|---|
+| `sku` | String | Product code |
+| `name` | String | |
+| `category` | String | Electronics, Software, Furniture, Services |
+| `unit_price` | Number | |
+| `cost_price` | Number | |
+| `margin_pct` | Number | Gross margin percentage |
+| `supplier_id` | ObjectId | → `suppliers._id` |
+| `stock_quantity` | Number | |
+| `is_active` | Boolean | |
+
+#### `suppliers` (8 documents)
+| Field | Type | Notes |
+|---|---|---|
+| `name` | String | Dell, Microsoft, Herman Miller, … |
+| `country` | String | |
+| `lead_time_days` | Number | |
+| `contact_email` | String | |
+| `is_active` | Boolean | |
+
+#### `orders` (900 documents)
+| Field | Type | Notes |
+|---|---|---|
+| `order_number` | String | |
+| `customer_id` | ObjectId | → `customers._id` |
+| `product_id` | ObjectId | → `products._id` |
+| `account_manager_id` | ObjectId | → `employees._id` |
+| `contact_id` | ObjectId | → `contacts._id` |
+| `quantity` | Number | |
+| `unit_price` | Number | |
+| `discount_pct` | Number | |
+| `total_amount` | Number | |
+| `region` | String | |
+| `status` | String | `completed` / `pending` / `cancelled` / `refunded` |
+| `payment_status` | String | `paid` / `pending` / `failed` |
+| `order_date` | Date | |
+| `delivery_date` | Date | |
+
+#### `transactions` (600 documents)
+| Field | Type | Notes |
+|---|---|---|
+| `type` | String | `revenue` / `expense` / `refund` |
+| `category` | String | Sales Revenue, Payroll, Operating Expense, … |
+| `amount` | Number | |
+| `currency` | String | USD |
+| `date` | Date | |
+| `status` | String | `completed` / `pending` / `failed` |
+| `customer_id` | ObjectId | → `customers._id` (nullable) |
+| `order_id` | ObjectId | → `orders._id` (nullable) |
+| `employee_id` | ObjectId | → `employees._id` (nullable) |
+| `description` | String | |
+
+### Entity Relationship Diagram
+
+```mermaid
+erDiagram
+    suppliers ||--o{ products : "supplies"
+    products ||--o{ orders : "included in"
+    customers ||--o{ orders : "places"
+    employees ||--o{ orders : "account_manager"
+    contacts }o--|| customers : "belongs to"
+    orders ||--o{ contacts : "linked to"
+    employees ||--o{ customers : "account_manager"
+    employees ||--o{ employees : "manages"
+    customers ||--o{ transactions : "generates"
+    orders ||--o{ transactions : "recorded in"
+    employees ||--o{ transactions : "involved in"
+```
+
+---
+
+## Project Structure
+
+```
+bi-wikolabs/
+├── app.py                      # Chainlit entry point — chat handlers, export actions
+├── agent.py                    # Legacy simplified agent (not used in production)
+├── db.py                       # MongoDB connection + SchemaExtractor singleton
+├── data_layer.py               # SQLite-backed Chainlit data persistence (threads, steps)
+├── exporter.py                 # Excel (.xlsx) and PDF export utilities
+├── prompts.py                  # LLM system prompts
+├── schema_extractor.py         # Dynamic MongoDB schema sampler (20 docs/collection)
+├── schemas.py                  # Hardcoded fallback schemas (used if DB unavailable)
+├── pipelines.py                # 7 pre-built analytics aggregation pipelines
+├── seed.py                     # MongoDB demo data seeder (deterministic, seed=42)
+│
+├── pipeline/                   # 6-step query pipeline
+│   ├── __init__.py
+│   ├── orchestrator.py         # Main coordinator — runs and merges all steps
+│   ├── analyzer.py             # Step 1: classify + extract entities
+│   ├── entity_resolver.py      # Step 2: name → ObjectId resolution
+│   ├── collection_selector.py  # Step 3: pick relevant MongoDB collections
+│   ├── mql_generator.py        # Step 4: generate MongoDB query JSON
+│   ├── executor.py             # Step 5: execute + auto-retry on error
+│   └── responder.py            # Step 6: narrative + Plotly chart + DataFrame
+│
+├── .chainlit/
+│   └── config.toml             # Chainlit UI configuration (theme, features)
+├── .github/
+│   └── workflows/
+│       └── deploy.yml          # GitHub Actions CI/CD — SSH deploy to VPS
+│
+├── docker-compose.yml          # Stack: mongo + app + caddy
+├── Dockerfile                  # Python 3.12-slim image, runs chainlit
+├── Caddyfile                   # Caddy config: reverse proxy + /exports/* static files
+├── requirements.txt            # Python dependencies
+├── .env.example                # Environment variable template
+└── mql-pipeline-architecture.md  # Detailed technical architecture documentation
+```
+
+---
+
+## Getting Started (Local Development)
+
+### Prerequisites
+
+- Python 3.12+
+- MongoDB running locally (or Docker)
+- A [Groq API key](https://console.groq.com/) (free tier available)
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/Wikolabs/bi-wikolabs.git
+cd bi-wikolabs
+```
+
+### 2. Create and activate a virtual environment
+
+```bash
+python -m venv .venv
+
+# Windows
+.venv\Scripts\activate
+
+# macOS / Linux
+source .venv/bin/activate
+```
+
+### 3. Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 4. Configure environment variables
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env`:
+
+```env
+GROQ_API_KEY=your_groq_api_key_here
+MONGODB_URI=mongodb://localhost:27017
+```
+
+### 5. Start MongoDB
+
+If you have Docker:
+
+```bash
+docker run -d -p 27017:27017 --name mongo mongo:7
+```
+
+Or start your local MongoDB instance.
+
+### 6. Seed demo data
+
+```bash
+python seed.py
+```
+
+This creates the full dataset: 8 suppliers, 26 products, 48 employees, 80 customers, 30+ contacts, 900 orders, 600 transactions — all with consistent ObjectId relationships.
+
+### 7. Run the app
+
+```bash
+chainlit run app.py
+```
+
+Open [http://localhost:8000](http://localhost:8000) in your browser.
+
+---
+
+## Deployment with Docker
+
+### Full stack (recommended for production)
+
+```bash
+# 1. Set up environment variables
+cp .env.example .env
+# Edit .env with your GROQ_API_KEY and CHAINLIT_AUTH_SECRET
+
+# 2. Build and start all services
+docker compose up -d --build
+
+# 3. Seed the database (first time only)
+docker compose exec app python seed.py
+```
+
+Services started:
+- **mongo** — MongoDB 7 on internal network (no external port exposed)
+- **app** — Chainlit app on port `8000`
+- **caddy** — Reverse proxy on ports `80` / `443` (requires DNS pointing to the server)
+
+### Ports & volumes
+
+| Service | Port | Volume |
+|---|---|---|
+| app | 8000 (internal, proxied by Caddy) | `app_data:/data` (SQLite DB + exports) |
+| caddy | 80, 443 | `caddy_data`, `caddy_config`, `app_data` (read-only for serving exports) |
+| mongo | internal only | `mongo_data:/data/db` |
+
+### Caddyfile (TLS + routing)
+
+```
+bi.wikolabs.com {
+    handle /exports/* {
+        root * /srv/app_data
+        file_server
+    }
+
+    handle {
+        reverse_proxy app:8000
+    }
+}
+```
+
+Replace `bi.wikolabs.com` with your domain. Caddy handles TLS automatically via Let's Encrypt.
+
+### Useful commands
+
+```bash
+# View logs
+docker compose logs -f app
+
+# Restart the app only (after code changes)
+docker compose up -d --build app
+
+# Stop everything
+docker compose down
+
+# Wipe all data and restart fresh
+docker compose down -v
+docker compose up -d --build
+docker compose exec app python seed.py
+```
+
+---
+
+## CI/CD — GitHub Actions
+
+The workflow file is at `.github/workflows/deploy.yml`.
+
+**Trigger:** Every push to the `main` branch (also supports manual dispatch via `workflow_dispatch`).
+
+### What the pipeline does
+
+```mermaid
+flowchart TD
+    PUSH["Push to main branch"]
+    GHA["GitHub Actions\nubuntu-latest"]
+    SSH["SSH into VPS\nappleboy/ssh-action@v1.2.0"]
+    CHK{"/opt/bi-wikolabs\nexists?"}
+    CLONE["git clone repo"]
+    PULL["git pull origin main"]
+    ENV["Write .env from GitHub Secrets\nGROQ_API_KEY · MONGODB_URI · CHAINLIT_AUTH_SECRET"]
+    BUILD["docker compose up -d --build"]
+    SLEEP["sleep 8s\nwait for services"]
+    SEED["docker compose exec app python seed.py\nbest-effort"]
+    DONE["Deployment complete"]
+
+    PUSH --> GHA --> SSH --> CHK
+    CHK -->|No| CLONE --> ENV
+    CHK -->|Yes| PULL --> ENV
+    ENV --> BUILD --> SLEEP --> SEED --> DONE
+```
+
+**Deploy destination:** `/opt/bi-wikolabs` on the VPS, running as `root`.
+
+---
+
+## GitHub Secrets Reference
+
+Configure these in **GitHub → Settings → Secrets and variables → Actions → New repository secret**:
+
+| Secret name | Required | Description |
+|---|---|---|
+| `VPS_HOST` | Yes | IP address or hostname of your VPS (e.g., `123.45.67.89`) |
+| `SSH_PRIVATE_KEY` | Yes | Private SSH key (ED25519 or RSA) with access to the VPS root account |
+| `GROQ_API_KEY` | Yes | Your Groq API key from [console.groq.com](https://console.groq.com/) |
+| `CHAINLIT_AUTH_SECRET` | Yes | Random secret string for Chainlit session tokens (generate with `openssl rand -hex 32`) |
+
+### Generating `CHAINLIT_AUTH_SECRET`
+
+```bash
+openssl rand -hex 32
+```
+
+### Setting up SSH access for GitHub Actions
+
+On your VPS, add the corresponding public key to `~/.ssh/authorized_keys`:
+
+```bash
+echo "your-public-key-here" >> ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+```
+
+---
+
+## Environment Variables
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `GROQ_API_KEY` | Yes | — | Groq API authentication key |
+| `MONGODB_URI` | No | `mongodb://mongo:27017` | MongoDB connection URI |
+| `CHAINLIT_AUTH_SECRET` | Yes (prod) | — | Secret for signing Chainlit session tokens |
+
+---
+
+## Example Queries
+
+The chatbot handles a wide range of business analytics questions:
+
+### Metrics (single KPIs)
+- "What is our total revenue this year?"
+- "How many orders were completed last month?"
+- "What is the average order value?"
+
+### Rankings (Top-N)
+- "Show me the top 5 products by revenue"
+- "Which 3 account managers have the highest quota attainment?"
+- "What are our best-selling product categories?"
+
+### Lists (filtered records)
+- "Show all orders from Enterprise customers in the North region"
+- "List employees in the Sales department hired after 2023"
+- "Which customers have churned status?"
+
+### Comparisons
+- "Compare revenue by region for Q1 vs Q2"
+- "How does the margin differ across product categories?"
+- "Revenue breakdown by customer segment"
+
+### Entity lookups
+- "What is the lifetime value of Acme Corp?"
+- "Show all orders placed by Alice Johnson"
+- "What products does Dell supply?"
+
+### WHY / root-cause questions
+- "Why is revenue down in the South region?"
+- "Why is employee quota attainment below target?"
+
+### Compound questions
+- "Show total revenue AND the top 3 products by sales"
+- "What is our headcount by department and also the average salary per department?"
+
+---
+
+## Export Features
+
+After any query that returns tabular data, export buttons appear in the chat:
+
+| Format | Button | Notes |
+|---|---|---|
+| Excel | **Export XLSX** | Bold headers, auto-width columns, all data rows |
+| PDF | **Export PDF** | Landscape A4, capped at 500 rows |
+
+Exported files are written to `/data/exports/` inside the container and served via Caddy at `https://bi.wikolabs.com/exports/<uuid>.<ext>`.
+
+---
+
+## Contributing & Developer Onboarding
+
+### Understanding the codebase
+
+Start with these files in order:
+
+1. **`app.py`** — The Chainlit entry point. Understand the message flow and how results are displayed.
+2. **`pipeline/orchestrator.py`** — The main pipeline coordinator. Read the `run()` function (line ~149).
+3. **`pipeline/analyzer.py`** → **`entity_resolver.py`** → **`collection_selector.py`** → **`mql_generator.py`** → **`executor.py`** → **`responder.py`** — Each step in sequence.
+4. **`db.py`** + **`schema_extractor.py`** — How MongoDB connection and schema introspection work.
+5. **`seed.py`** — The full data model. Read this to understand every collection's shape.
+
+For deep architecture detail, read **`mql-pipeline-architecture.md`**.
+
+### Adding a new query type
+
+1. Add the type name to the `query_type` enum in `pipeline/analyzer.py`'s system prompt.
+2. Add few-shot examples for the new type in `pipeline/mql_generator.py`.
+3. Add chart logic in `pipeline/responder.py` if needed.
+
+### Adding a new MongoDB collection
+
+1. Add seed data in `seed.py` (create the collection and insert documents).
+2. Add the collection name and summary to `pipeline/collection_selector.py`'s keyword fallback map.
+3. Add a fallback schema entry in `schemas.py`.
+4. Add entity search logic in `pipeline/entity_resolver.py` if the collection contains named entities.
+
+### Running tests / linting
+
+There is no test suite at this stage. Manual testing via the chat UI is the current approach. Seed data is deterministic (Faker seed 42) so queries return consistent results.
+
+### Key design decisions
+
+| Decision | Reason |
+|---|---|
+| Groq over OpenAI | 10–20× faster inference — critical for a chat interface |
+| MongoDB over SQL | Flexible document model suits evolving BI schemas |
+| Dynamic schema extraction | LLM gets current column names even after schema changes |
+| Parallel Steps 2 & 3 | ~500ms saved per query with `asyncio.gather` |
+| Entity → ObjectId resolution | Prevents brittle name-matching; handles name duplicates |
+| Self-correcting MQL (retry) | Eliminates ~30% of failures without user intervention |
+| Chainlit (not FastAPI + custom UI) | Python-native, handles streaming + file uploads out of the box |
+| Caddy (not Nginx) | Automatic TLS via Let's Encrypt, zero config for static files |
+| SQLite for chat history | No extra service to manage; suitable for single-server deployment |
+
+---
+
+## License
+
+Proprietary — Wikolabs. All rights reserved.
