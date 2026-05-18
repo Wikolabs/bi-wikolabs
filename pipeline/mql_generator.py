@@ -57,8 +57,20 @@ User: "Show all orders from Acme Global Corp" (already resolved to ObjectId abc1
 }
 
 
+# Inline fallback schemas — used when the dynamic extractor is unavailable
+_FALLBACK_SCHEMAS: dict[str, str] = {
+    "orders": "Fields: order_number(str), customer_id(ObjectId→customers), contact_id(ObjectId→contacts), account_manager_id(ObjectId→employees), product_id(ObjectId→products), product_name(str), customer_name(str), category(str), quantity(int), unit_price(float), discount_pct(float), total_amount(float), region(str), status(str: completed|pending|cancelled|refunded), payment_status(str: paid|invoiced|overdue), order_date(date), delivery_date(date)",
+    "products": "Fields: sku(str), name(str), category(str: Electronics|Software|Furniture|Office Supplies|Services), unit_price(float), cost_price(float), margin_pct(float), supplier_id(ObjectId→suppliers), stock_quantity(int), is_active(bool)",
+    "customers": "Fields: name(str), industry(str), segment(str: Enterprise|SMB|Individual), region(str), country(str), account_manager_id(ObjectId→employees), status(str: active|churned|prospect), annual_revenue(float), lifetime_value(float), registration_date(date), is_active(bool)",
+    "contacts": "Fields: name(str), title(str), email(str), phone(str), company_id(ObjectId→customers), company_name(str), is_primary(bool), last_contact_date(date)",
+    "employees": "Fields: name(str), department(str: Sales|Engineering|Finance|HR|Operations|Marketing), role(str), salary(float), hire_date(date), manager_id(ObjectId→employees), performance_score(float 1-5), quota(float), quota_attainment(float), is_active(bool)",
+    "transactions": "Fields: type(str: revenue|expense|refund), category(str: Sales Revenue|Payroll|Marketing|Operations|IT Infrastructure|Refund|Consulting), amount(float), currency(str), date(date), status(str: completed|pending|failed), customer_id(ObjectId→customers), order_id(ObjectId→orders), employee_id(ObjectId→employees), description(str)",
+    "suppliers": "Fields: name(str), country(str), lead_time_days(int), contact_email(str), is_active(bool)",
+}
+
+
 def _build_schema_context(collections: list) -> str:
-    """Build schema context using the dynamic extractor; fall back to static SCHEMAS."""
+    """Build schema context using the dynamic extractor; fall back to inline schemas."""
     try:
         from db import get_extractor
         extractor = get_extractor()
@@ -67,10 +79,10 @@ def _build_schema_context(collections: list) -> str:
             lines.append(extractor.to_prompt(col))
         return "\n".join(lines)
     except Exception:
-        from schemas import SCHEMAS
-        lines = ["RELEVANT COLLECTION SCHEMAS:"]
+        lines = ["RELEVANT COLLECTION SCHEMAS (static fallback):"]
         for col in collections:
-            lines.append(f"{col}:\n{SCHEMAS.get(col, '(unavailable)')}")
+            schema = _FALLBACK_SCHEMAS.get(col, f"{col}: (schema unavailable)")
+            lines.append(f"{col}: {schema}")
         return "\n".join(lines)
 
 
