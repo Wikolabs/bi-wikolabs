@@ -1,4 +1,13 @@
-"""Orchestrator — coordinates all 6 pipeline steps with parallel execution."""
+"""Orchestrator — coordinates all pipeline steps.
+
+run() now returns a 5-tuple:
+  (narrative, figure, dataframe, last_spec, last_collections)
+
+last_spec and last_collections are used by app.py to save golden records
+when the user marks a result as correct.
+"""
+
+from __future__ import annotations
 
 import asyncio
 import json
@@ -9,7 +18,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from groq import AsyncGroq
 
-from db import get_db
+from db import get_client_db
 from pipeline.analyzer import analyze
 from pipeline.collection_selector import select
 from pipeline.entity_resolver import resolve
@@ -40,22 +49,14 @@ I can answer business questions by querying your MongoDB database in real time. 
 - *"Show monthly cash flow for the last year"*
 - *"Which customer segment is most profitable?"*
 - *"What orders did Marcus Johnson manage?"*
-- *"Show me all orders for Acme Global Corp"*
 
 What would you like to explore?"""
 
 
 async def _decompose(question: str) -> list[str]:
-    """Split a compound question into independent sub-questions, or return [question].
-
-    Only calls the LLM when obvious compound patterns are detected.
-    """
-    if not re.search(
-        r'\b(and also|as well as|additionally|both .+ and)\b',
-        question.lower()
-    ):
+    """Split a compound question into sub-questions, or return [question]."""
+    if not re.search(r'\b(and also|as well as|additionally|both .+ and)\b', question.lower()):
         return [question]
-
     try:
         resp = await _groq.chat.completions.create(
             model="llama-3.1-8b-instant",
@@ -65,8 +66,8 @@ async def _decompose(question: str) -> list[str]:
                     "content": (
                         "Split this compound business question into independent sub-questions. "
                         "Return ONLY a JSON array of strings. "
-                        "If it is not compound, return an array with the original question. "
-                        'Example: ["Show monthly revenue trend", "Show top 5 products by margin"]'
+                        "If not compound, return an array with the original question. "
+                        'Example: ["Show monthly revenue", "Show top 5 products by margin"]'
                     ),
                 },
                 {"role": "user", "content": question},
@@ -85,12 +86,15 @@ async def _decompose(question: str) -> list[str]:
     return [question]
 
 
-async def _run_single(question: str, db) -> list:
-    """Run steps 1-5 for a single question and return raw results."""
-    analysis   = await analyze(question)
+async def _run_single(question: str, db) -> tuple[list, dict, list[str]]:
+    """Run steps 1-5 for a single question.
+
+    Returns (results, last_spec, collections).
+    """
+    analysis = await analyze(question)
 
     if analysis.get("query_type") == "smalltalk":
-        return []
+        return [], {}, []
 
     entities   = analysis.get("entities", [])
     intent     = analysis.get("intent", question)
@@ -100,145 +104,98 @@ async def _run_single(question: str, db) -> list:
         resolve(entities, db),
         select(intent, query_type, entities, db=db),
     )
-
     if not collections:
         collections = ["orders"]
 
-    spec = await generate(
-        question=question,
-        analysis=analysis,
-        collections=collections,
-        entity_map=entity_map,
-    )
+    spec = await generate(question=question, analysis=analysis,
+                          collections=collections, entity_map=entity_map)
 
-    results = await execute_with_retry(
-        spec=spec,
-        question=question,
-        analysis=analysis,
-        collections=collections,
-        entity_map=entity_map,
-        db=db,
-    )
+    results = await execute_with_retry(spec=spec, question=question, analysis=analysis,
+                                       collections=collections, entity_map=entity_map, db=db)
 
-    # Optional drill-down for WHY questions
     if analysis.get("is_why_question") and results:
-        drill_question = f"Why: {question} — context: {results[:5]}"
-        drill_analysis = {**analysis, "is_why_question": False, "query_type": "comparison"}
-        drill_spec = await generate(
-            question=drill_question,
-            analysis=drill_analysis,
-            collections=collections,
-            entity_map=entity_map,
-        )
+        drill_q = f"Why: {question} — context: {results[:5]}"
+        drill_a = {**analysis, "is_why_question": False, "query_type": "comparison"}
+        drill_spec = await generate(question=drill_q, analysis=drill_a,
+                                    collections=collections, entity_map=entity_map)
         try:
-            drill_results = await execute_with_retry(
-                spec=drill_spec,
-                question=drill_question,
-                analysis=drill_analysis,
-                collections=collections,
-                entity_map=entity_map,
-                db=db,
-            )
+            drill_results = await execute_with_retry(spec=drill_spec, question=drill_q,
+                                                     analysis=drill_a, collections=collections,
+                                                     entity_map=entity_map, db=db)
             results = results + drill_results
         except Exception:
-            pass  # Drill-down is best-effort
+            pass
 
-    return results
+    return results, spec, collections
 
 
-async def run(question: str) -> tuple[str, Optional[go.Figure], Optional[pd.DataFrame]]:
-    """Execute the full BI pipeline for a user question.
-
-    Steps:
-        0. Decompose compound questions into sub-questions
-        1. Analyze each sub-question (classifier + entity extraction)
-        2. Parallel: resolve entities + select collections
-        3. Generate MQL query
-        4. Execute with retry
-        5. Merge results
-        6. Generate response (narrative + chart + dataframe)
+async def run(
+    question: str,
+) -> tuple[str, Optional[go.Figure], Optional[pd.DataFrame], dict, list[str]]:
+    """Execute the full BI pipeline.
 
     Returns:
-        (narrative, figure, dataframe) — figure and dataframe may be None
-    """
-    db = get_db()
+        (narrative, figure, dataframe, last_spec, last_collections)
 
-    # ── Step 0: Compound question decomposition ────────────────────────────────
+    last_spec / last_collections are passed back to app.py so the user
+    can save a golden record when the result is confirmed correct.
+    """
+    db = get_client_db()
+
     sub_questions = await _decompose(question)
 
-    # Short-circuit: check if the single question is smalltalk
+    last_spec: dict = {}
+    last_collections: list[str] = []
+
     if len(sub_questions) == 1:
         analysis = await analyze(sub_questions[0])
+
         if analysis.get("query_type") == "smalltalk":
-            return GREETING_RESPONSE, None, None
+            return GREETING_RESPONSE, None, None, {}, []
 
         entities   = analysis.get("entities", [])
         intent     = analysis.get("intent", question)
         query_type = analysis.get("query_type", "metric")
 
-        # ── Steps 2 & 3: Parallel entity resolution + collection selection ─────
         entity_map, collections = await asyncio.gather(
             resolve(entities, db),
             select(intent, query_type, entities, db=db),
         )
-
         if not collections:
             collections = ["orders"]
 
-        # ── Step 4: Generate MQL ───────────────────────────────────────────────
-        spec = await generate(
-            question=question,
-            analysis=analysis,
-            collections=collections,
-            entity_map=entity_map,
-        )
+        spec = await generate(question=question, analysis=analysis,
+                              collections=collections, entity_map=entity_map)
+        last_spec, last_collections = spec, collections
 
-        # ── Step 5: Execute with retry ─────────────────────────────────────────
-        results = await execute_with_retry(
-            spec=spec,
-            question=question,
-            analysis=analysis,
-            collections=collections,
-            entity_map=entity_map,
-            db=db,
-        )
+        results = await execute_with_retry(spec=spec, question=question, analysis=analysis,
+                                           collections=collections, entity_map=entity_map, db=db)
 
-        # Optional drill-down for WHY questions
         if analysis.get("is_why_question") and results:
-            drill_question = f"Why: {question} — context: {results[:5]}"
-            drill_analysis = {**analysis, "is_why_question": False, "query_type": "comparison"}
-            drill_spec = await generate(
-                question=drill_question,
-                analysis=drill_analysis,
-                collections=collections,
-                entity_map=entity_map,
-            )
+            drill_q = f"Why: {question} — context: {results[:5]}"
+            drill_a = {**analysis, "is_why_question": False, "query_type": "comparison"}
+            drill_spec = await generate(question=drill_q, analysis=drill_a,
+                                        collections=collections, entity_map=entity_map)
             try:
-                drill_results = await execute_with_retry(
-                    spec=drill_spec,
-                    question=drill_question,
-                    analysis=drill_analysis,
-                    collections=collections,
-                    entity_map=entity_map,
-                    db=db,
-                )
+                drill_results = await execute_with_retry(spec=drill_spec, question=drill_q,
+                                                         analysis=drill_a, collections=collections,
+                                                         entity_map=entity_map, db=db)
                 results = results + drill_results
             except Exception:
                 pass
 
     else:
-        # ── Compound question: run sub-queries concurrently then merge ─────────
-        all_results_lists = await asyncio.gather(
+        all_results = await asyncio.gather(
             *[_run_single(sq, db) for sq in sub_questions],
             return_exceptions=True,
         )
         results = []
-        for r in all_results_lists:
-            if isinstance(r, list):
-                results.extend(r)
-        # Re-use the original question's analysis for the responder
+        for r in all_results:
+            if isinstance(r, tuple):
+                results.extend(r[0])
+                if r[1]:
+                    last_spec, last_collections = r[1], r[2]
         analysis = await analyze(question)
 
-    # ── Step 6: Respond ────────────────────────────────────────────────────────
     narrative, figure, df = await respond(question, analysis, results)
-    return narrative, figure, df
+    return narrative, figure, df, last_spec, last_collections

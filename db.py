@@ -1,20 +1,49 @@
+"""Database connections.
+
+- get_client_db()  → pymongo Database  (client's MongoDB, READ-ONLY)
+- get_pg_pool()    → asyncpg Pool       (our internal PostgreSQL, read/write)
+"""
+
+import asyncio
 import os
+
+import asyncpg
 from pymongo import MongoClient
 
-_client = None
-_extractor = None
+_mongo_client: MongoClient | None = None
+_pg_pool: asyncpg.Pool | None = None
+_pg_lock = asyncio.Lock()
 
 
-def get_db():
-    global _client
-    if _client is None:
-        _client = MongoClient(os.getenv("MONGODB_URI", "mongodb://mongo:27017"))
-    return _client["bi_wikolabs"]
+def get_client_db():
+    """Return the client's MongoDB database (read-only connection)."""
+    global _mongo_client
+    if _mongo_client is None:
+        uri = os.getenv("MONGODB_URI", "mongodb://mongo:27017")
+        _mongo_client = MongoClient(uri, readPreference="secondaryPreferred")
+    return _mongo_client.get_default_database()
 
 
-def get_extractor():
-    global _extractor
-    from schema_extractor import SchemaExtractor
-    if _extractor is None:
-        _extractor = SchemaExtractor(get_db())
-    return _extractor
+async def get_pg_pool() -> asyncpg.Pool:
+    """Return the shared asyncpg connection pool to our internal PostgreSQL."""
+    global _pg_pool
+    if _pg_pool is not None:
+        return _pg_pool
+    async with _pg_lock:
+        if _pg_pool is None:
+            from pgvector.asyncpg import register_vector
+
+            _pg_pool = await asyncpg.create_pool(
+                dsn=os.getenv("POSTGRES_URI"),
+                min_size=2,
+                max_size=10,
+                init=register_vector,
+            )
+    return _pg_pool
+
+
+async def close_pg_pool() -> None:
+    global _pg_pool
+    if _pg_pool is not None:
+        await _pg_pool.close()
+        _pg_pool = None

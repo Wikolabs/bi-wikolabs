@@ -26,8 +26,9 @@ jobs:
             cd $APP_DIR
             git pull origin main
 
-            echo "GROQ_API_KEY=${{ secrets.GROQ_API_KEY }}" > .env
-            echo "MONGODB_URI=mongodb://mongo:27017" >> .env
+            echo "MONGODB_URI=${{ secrets.MONGODB_URI }}" > .env
+            echo "GROQ_API_KEY=${{ secrets.GROQ_API_KEY }}" >> .env
+            echo "POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}" >> .env
             echo "CHAINLIT_AUTH_SECRET=${{ secrets.CHAINLIT_AUTH_SECRET }}" >> .env
 
             docker compose up -d --build

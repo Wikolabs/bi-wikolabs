@@ -1,25 +1,37 @@
 services:
-  mongo:
-    image: mongo:7
+  postgres:
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
+    environment:
+      POSTGRES_DB: bi_wikolabs
+      POSTGRES_USER: bi
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
-      - mongo_data:/data/db
+      - pg_data:/var/lib/postgresql/data
     networks:
       - bi_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bi -d bi_wikolabs"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   app:
     build: .
     restart: unless-stopped
     env_file: .env
     environment:
-      - MONGODB_URI=mongodb://mongo:27017
+      - MONGODB_URI
+      - POSTGRES_URI=postgresql://bi:${POSTGRES_PASSWORD}@postgres:5432/bi_wikolabs
       - CHAINLIT_AUTH_SECRET
     ports:
       - "8000:8000"
     volumes:
       - app_data:/data
+      - model_cache:/root/.cache/fastembed
     depends_on:
-      - mongo
+      postgres:
+        condition: service_healthy
     networks:
       - bi_net
 
@@ -42,7 +54,8 @@ networks:
   bi_net:
 
 volumes:
-  mongo_data:
+  pg_data:
+  app_data:
+  model_cache:
   caddy_data:
   caddy_config:
-  app_data:

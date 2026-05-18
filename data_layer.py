@@ -1,7 +1,12 @@
-"""SQLite-backed data layer for Chainlit thread history."""
+"""PostgreSQL-backed data layer for Chainlit thread history.
+
+Replaces the previous SQLiteDataLayer. All data lives in our internal
+PostgreSQL database — never in the client's MongoDB.
+"""
+
+from __future__ import annotations
 
 import json
-import sqlite3
 import uuid
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
@@ -15,13 +20,7 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _serialize_step_field(value) -> str:
-    """Convert step input/output to a plain string for storage.
-
-    - dict/list → JSON string
-    - str → stored as-is (no double encoding)
-    - anything else → str()
-    """
+def _serialize(value) -> str:
     if isinstance(value, (dict, list)):
         return json.dumps(value, default=str)
     if isinstance(value, str):
@@ -29,99 +28,50 @@ def _serialize_step_field(value) -> str:
     return str(value) if value is not None else ""
 
 
-class SQLiteDataLayer(BaseDataLayer):
-    def __init__(self, db_path: str = "/data/threads.db"):
-        self.db_path = db_path
-        self._init_db()
+class PostgresDataLayer(BaseDataLayer):
+    """Chainlit data persistence backed by our internal PostgreSQL."""
 
-    def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+    async def _pool(self):
+        from db import get_pg_pool
+        return await get_pg_pool()
 
-    def _init_db(self):
-        with self._conn() as c:
-            c.executescript("""
-                CREATE TABLE IF NOT EXISTS users (
-                    id          TEXT PRIMARY KEY,
-                    identifier  TEXT UNIQUE NOT NULL,
-                    metadata    TEXT DEFAULT '{}',
-                    created_at  TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS threads (
-                    id          TEXT PRIMARY KEY,
-                    name        TEXT,
-                    user_id     TEXT,
-                    metadata    TEXT DEFAULT '{}',
-                    tags        TEXT DEFAULT '[]',
-                    created_at  TEXT NOT NULL,
-                    updated_at  TEXT NOT NULL,
-                    deleted     INTEGER DEFAULT 0
-                );
-                CREATE TABLE IF NOT EXISTS steps (
-                    id          TEXT PRIMARY KEY,
-                    thread_id   TEXT NOT NULL,
-                    type        TEXT,
-                    name        TEXT,
-                    input       TEXT,
-                    output      TEXT,
-                    metadata    TEXT DEFAULT '{}',
-                    is_error    INTEGER DEFAULT 0,
-                    favorite    INTEGER DEFAULT 0,
-                    created_at  TEXT NOT NULL,
-                    FOREIGN KEY (thread_id) REFERENCES threads(id)
-                );
-                CREATE TABLE IF NOT EXISTS elements (
-                    id          TEXT PRIMARY KEY,
-                    thread_id   TEXT,
-                    type        TEXT,
-                    name        TEXT,
-                    url         TEXT,
-                    metadata    TEXT DEFAULT '{}'
-                );
-                CREATE TABLE IF NOT EXISTS feedbacks (
-                    id          TEXT PRIMARY KEY,
-                    step_id     TEXT,
-                    value       INTEGER,
-                    comment     TEXT,
-                    created_at  TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_threads_user ON threads(user_id);
-                CREATE INDEX IF NOT EXISTS idx_steps_thread ON steps(thread_id);
-            """)
-
-    # ── Users ────────────────────────────────────────────────────────────────
+    # ── Users ─────────────────────────────────────────────────────────────────
 
     async def get_user(self, identifier: str) -> Optional[PersistedUser]:
-        with self._conn() as c:
-            row = c.execute(
-                "SELECT * FROM users WHERE identifier = ?", (identifier,)
-            ).fetchone()
+        pool = await self._pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM chat_users WHERE identifier = $1", identifier
+            )
         if not row:
             return None
         return PersistedUser(
             id=row["id"],
             identifier=row["identifier"],
-            metadata=json.loads(row["metadata"]),
-            createdAt=row["created_at"],
+            metadata=dict(row["metadata"]) if row["metadata"] else {},
+            createdAt=row["created_at"].isoformat(),
         )
 
     async def create_user(self, user: User) -> Optional[PersistedUser]:
+        pool = await self._pool()
         uid = str(uuid.uuid4())
-        now = _now()
-        with self._conn() as c:
-            c.execute(
-                "INSERT OR IGNORE INTO users VALUES (?, ?, ?, ?)",
-                (uid, user.identifier, json.dumps(user.metadata or {}), now),
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO chat_users (id, identifier, metadata)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (identifier) DO NOTHING
+                """,
+                uid, user.identifier, json.dumps(user.metadata or {}),
             )
-            row = c.execute(
-                "SELECT * FROM users WHERE identifier = ?", (user.identifier,)
-            ).fetchone()
+            row = await conn.fetchrow(
+                "SELECT * FROM chat_users WHERE identifier = $1", user.identifier
+            )
         return PersistedUser(
             id=row["id"],
             identifier=row["identifier"],
-            metadata=json.loads(row["metadata"]),
-            createdAt=row["created_at"],
+            metadata=dict(row["metadata"]) if row["metadata"] else {},
+            createdAt=row["created_at"].isoformat(),
         )
 
     # ── Threads ───────────────────────────────────────────────────────────────
@@ -134,181 +84,203 @@ class SQLiteDataLayer(BaseDataLayer):
         metadata: Optional[Dict] = None,
         tags: Optional[List[str]] = None,
     ) -> None:
-        now = _now()
-        with self._conn() as c:
-            existing = c.execute(
-                "SELECT * FROM threads WHERE id = ?", (thread_id,)
-            ).fetchone()
-            if existing:
-                c.execute(
-                    """UPDATE threads
-                       SET name=COALESCE(?, name),
-                           user_id=COALESCE(?, user_id),
-                           metadata=COALESCE(?, metadata),
-                           tags=COALESCE(?, tags),
-                           updated_at=?
-                       WHERE id=?""",
-                    (
-                        name,
-                        user_id,
-                        json.dumps(metadata) if metadata is not None else None,
-                        json.dumps(tags) if tags is not None else None,
-                        now,
-                        thread_id,
-                    ),
+        pool = await self._pool()
+        async with pool.acquire() as conn:
+            exists = await conn.fetchval(
+                "SELECT 1 FROM chat_threads WHERE id = $1", thread_id
+            )
+            if exists:
+                await conn.execute(
+                    """
+                    UPDATE chat_threads
+                    SET name      = COALESCE($2, name),
+                        user_id   = COALESCE($3, user_id),
+                        metadata  = COALESCE($4::jsonb, metadata),
+                        tags      = COALESCE($5::jsonb, tags),
+                        updated_at = NOW()
+                    WHERE id = $1
+                    """,
+                    thread_id,
+                    name,
+                    user_id,
+                    json.dumps(metadata) if metadata is not None else None,
+                    json.dumps(tags) if tags is not None else None,
                 )
             else:
-                c.execute(
-                    "INSERT INTO threads VALUES (?, ?, ?, ?, ?, ?, ?, 0)",
-                    (
-                        thread_id,
-                        name or "New conversation",
-                        user_id,
-                        json.dumps(metadata or {}),
-                        json.dumps(tags or []),
-                        now,
-                        now,
-                    ),
+                await conn.execute(
+                    """
+                    INSERT INTO chat_threads (id, name, user_id, metadata, tags)
+                    VALUES ($1, $2, $3, $4, $5)
+                    """,
+                    thread_id,
+                    name or "New conversation",
+                    user_id,
+                    json.dumps(metadata or {}),
+                    json.dumps(tags or []),
                 )
 
     async def delete_thread(self, thread_id: str) -> bool:
-        with self._conn() as c:
-            c.execute("UPDATE threads SET deleted=1 WHERE id=?", (thread_id,))
+        pool = await self._pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE chat_threads SET deleted = TRUE WHERE id = $1", thread_id
+            )
         return True
 
     async def list_threads(
         self, pagination: Pagination, filters: ThreadFilter
     ) -> PaginatedResponse[ThreadDict]:
-        with self._conn() as c:
-            user_filter = ""
-            params: list = [pagination.first + 1]
+        pool = await self._pool()
+        async with pool.acquire() as conn:
             if filters.userId:
-                user_filter = "AND user_id = ?"
-                params.insert(0, filters.userId)
-
-            rows = c.execute(
-                f"""SELECT t.*, GROUP_CONCAT(s.output, '|||') AS last_output
-                    FROM threads t
-                    LEFT JOIN steps s ON s.thread_id = t.id AND s.type = 'assistant_message'
-                    WHERE t.deleted = 0 {user_filter}
-                    GROUP BY t.id
+                rows = await conn.fetch(
+                    """
+                    SELECT t.*,
+                           (SELECT output FROM chat_steps
+                            WHERE thread_id = t.id AND type = 'assistant_message'
+                            ORDER BY created_at DESC LIMIT 1) AS last_output
+                    FROM chat_threads t
+                    WHERE t.deleted = FALSE AND t.user_id = $1
                     ORDER BY t.updated_at DESC
-                    LIMIT ?""",
-                params,
-            ).fetchall()
+                    LIMIT $2
+                    """,
+                    filters.userId, pagination.first + 1,
+                )
+            else:
+                rows = await conn.fetch(
+                    """
+                    SELECT t.*,
+                           (SELECT output FROM chat_steps
+                            WHERE thread_id = t.id AND type = 'assistant_message'
+                            ORDER BY created_at DESC LIMIT 1) AS last_output
+                    FROM chat_threads t
+                    WHERE t.deleted = FALSE
+                    ORDER BY t.updated_at DESC
+                    LIMIT $1
+                    """,
+                    pagination.first + 1,
+                )
 
         has_next = len(rows) > pagination.first
         rows = rows[: pagination.first]
 
-        threads = []
-        for r in rows:
-            outputs = (r["last_output"] or "").split("|||")
-            preview = outputs[-1][:100] if outputs else ""
-            threads.append(
-                ThreadDict(
-                    id=r["id"],
-                    name=r["name"] or "New conversation",
-                    createdAt=r["created_at"],
-                    userId=r["user_id"],
-                    userIdentifier=None,
-                    metadata=json.loads(r["metadata"]),
-                    steps=[],
-                    tags=json.loads(r["tags"]),
-                )
+        threads = [
+            ThreadDict(
+                id=r["id"],
+                name=r["name"] or "New conversation",
+                createdAt=r["created_at"].isoformat(),
+                userId=r["user_id"],
+                userIdentifier=None,
+                metadata=dict(r["metadata"]) if r["metadata"] else {},
+                steps=[],
+                tags=list(r["tags"]) if r["tags"] else [],
             )
+            for r in rows
+        ]
         return PaginatedResponse(
             data=threads,
             pageInfo={
                 "hasNextPage": has_next,
                 "startCursor": rows[0]["id"] if rows else None,
-                "endCursor": rows[-1]["id"] if rows else None,
+                "endCursor":   rows[-1]["id"] if rows else None,
             },
         )
 
     async def get_thread(self, thread_id: str) -> Optional[ThreadDict]:
-        with self._conn() as c:
-            t = c.execute(
-                "SELECT * FROM threads WHERE id=? AND deleted=0", (thread_id,)
-            ).fetchone()
+        pool = await self._pool()
+        async with pool.acquire() as conn:
+            t = await conn.fetchrow(
+                "SELECT * FROM chat_threads WHERE id = $1 AND deleted = FALSE", thread_id
+            )
             if not t:
                 return None
-            steps = c.execute(
-                "SELECT * FROM steps WHERE thread_id=? ORDER BY created_at",
-                (thread_id,),
-            ).fetchall()
+            steps = await conn.fetch(
+                "SELECT * FROM chat_steps WHERE thread_id = $1 ORDER BY created_at",
+                thread_id,
+            )
 
         return ThreadDict(
             id=t["id"],
             name=t["name"] or "New conversation",
-            createdAt=t["created_at"],
+            createdAt=t["created_at"].isoformat(),
             userId=t["user_id"],
             userIdentifier=None,
-            metadata=json.loads(t["metadata"]),
-            tags=json.loads(t["tags"]),
+            metadata=dict(t["metadata"]) if t["metadata"] else {},
+            tags=list(t["tags"]) if t["tags"] else [],
             steps=[
                 {
-                    "id": s["id"],
-                    "threadId": thread_id,
-                    "parentId": None,
-                    "type": s["type"] or "undefined",
-                    "name": s["name"] or "",
-                    "input": s["input"] or "",
-                    "output": s["output"] or "",
-                    "metadata": json.loads(s["metadata"] or "{}"),
-                    "createdAt": s["created_at"],
-                    "isError": bool(s["is_error"]),
+                    "id":        s["id"],
+                    "threadId":  thread_id,
+                    "parentId":  s["parent_id"],
+                    "type":      s["type"] or "undefined",
+                    "name":      s["name"] or "",
+                    "input":     s["input_"] or "",
+                    "output":    s["output"] or "",
+                    "metadata":  dict(s["metadata"]) if s["metadata"] else {},
+                    "createdAt": s["created_at"].isoformat(),
+                    "isError":   bool(s["is_error"]),
                     "streaming": False,
-                    "tags": [],
+                    "tags":      [],
                 }
                 for s in steps
             ],
         )
 
     async def get_thread_author(self, thread_id: str) -> Optional[str]:
-        with self._conn() as c:
-            row = c.execute(
-                "SELECT user_id FROM threads WHERE id=?", (thread_id,)
-            ).fetchone()
-        return row["user_id"] if row else None
+        pool = await self._pool()
+        async with pool.acquire() as conn:
+            return await conn.fetchval(
+                "SELECT user_id FROM chat_threads WHERE id = $1", thread_id
+            )
 
     # ── Steps ─────────────────────────────────────────────────────────────────
 
     async def create_step(self, step_dict: Dict) -> None:
-        now = _now()
-        with self._conn() as c:
-            c.execute(
-                "INSERT OR REPLACE INTO steps VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
-                (
-                    step_dict.get("id", str(uuid.uuid4())),
-                    step_dict.get("threadId"),
-                    step_dict.get("type"),
-                    step_dict.get("name"),
-                    _serialize_step_field(step_dict.get("input", "")),
-                    _serialize_step_field(step_dict.get("output", "")),
-                    json.dumps(step_dict.get("metadata", {})),
-                    1 if step_dict.get("isError") else 0,
-                    step_dict.get("createdAt", now),
-                ),
+        pool = await self._pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO chat_steps
+                    (id, thread_id, parent_id, type, name, input_, output, metadata, is_error, created_at)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                ON CONFLICT (id) DO UPDATE
+                  SET output    = EXCLUDED.output,
+                      is_error  = EXCLUDED.is_error,
+                      metadata  = EXCLUDED.metadata
+                """,
+                step_dict.get("id", str(uuid.uuid4())),
+                step_dict.get("threadId"),
+                step_dict.get("parentId"),
+                step_dict.get("type"),
+                step_dict.get("name"),
+                _serialize(step_dict.get("input", "")),
+                _serialize(step_dict.get("output", "")),
+                json.dumps(step_dict.get("metadata", {})),
+                bool(step_dict.get("isError", False)),
+                step_dict.get("createdAt", _now()),
             )
 
     async def update_step(self, step_dict: Dict) -> None:
         await self.create_step(step_dict)
 
     async def delete_step(self, step_id: str) -> None:
-        with self._conn() as c:
-            c.execute("DELETE FROM steps WHERE id=?", (step_id,))
+        pool = await self._pool()
+        async with pool.acquire() as conn:
+            await conn.execute("DELETE FROM chat_steps WHERE id = $1", step_id)
 
     async def get_favorite_steps(self, thread_id: str) -> List[Dict]:
-        with self._conn() as c:
-            rows = c.execute(
-                "SELECT * FROM steps WHERE thread_id=? AND favorite=1", (thread_id,)
-            ).fetchall()
+        pool = await self._pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM chat_steps WHERE thread_id = $1 AND favorite = TRUE", thread_id
+            )
         return [dict(r) for r in rows]
 
     async def set_step_favorite(self, step_id: str, is_favorite: bool) -> None:
-        with self._conn() as c:
-            c.execute(
-                "UPDATE steps SET favorite=? WHERE id=?", (1 if is_favorite else 0, step_id)
+        pool = await self._pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE chat_steps SET favorite = $1 WHERE id = $2", is_favorite, step_id
             )
 
     # ── Elements ──────────────────────────────────────────────────────────────
@@ -326,16 +298,23 @@ class SQLiteDataLayer(BaseDataLayer):
 
     async def upsert_feedback(self, feedback: Feedback) -> str:
         fid = str(uuid.uuid4())
-        with self._conn() as c:
-            c.execute(
-                "INSERT OR REPLACE INTO feedbacks VALUES (?, ?, ?, ?, ?)",
-                (fid, feedback.forId, feedback.value, feedback.comment, _now()),
+        pool = await self._pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO chat_feedbacks (id, step_id, value, comment)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (id) DO UPDATE
+                  SET value = EXCLUDED.value, comment = EXCLUDED.comment
+                """,
+                fid, feedback.forId, feedback.value, feedback.comment,
             )
         return fid
 
     async def delete_feedback(self, feedback_id: str) -> bool:
-        with self._conn() as c:
-            c.execute("DELETE FROM feedbacks WHERE id=?", (feedback_id,))
+        pool = await self._pool()
+        async with pool.acquire() as conn:
+            await conn.execute("DELETE FROM chat_feedbacks WHERE id = $1", feedback_id)
         return True
 
     # ── Misc ──────────────────────────────────────────────────────────────────
@@ -344,4 +323,5 @@ class SQLiteDataLayer(BaseDataLayer):
         return ""
 
     async def close(self) -> None:
-        pass
+        from db import close_pg_pool
+        await close_pg_pool()
