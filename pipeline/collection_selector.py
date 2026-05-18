@@ -1,61 +1,39 @@
-"""Step 3: Collection Selection — rule-based mapping from intent to collections."""
+"""Step 3: Collection Selection — LLM picks relevant collections from schema summaries."""
 
-# All available collections
-ALL_COLLECTIONS = ["sales", "products", "customers", "employees", "transactions"]
+import json
+import os
+import re
 
-# Keyword → collection mappings (checked against intent + question tokens)
+from groq import AsyncGroq
+
+_groq = AsyncGroq(api_key=os.getenv("GROQ_API_KEY"))
+MODEL = "llama-3.1-8b-instant"
+
+# Fallback keyword map (used when LLM fails or db is unavailable)
 _KEYWORD_MAP = {
-    "sales": [
-        "sale", "sales", "order", "orders", "revenue", "selling", "sold",
-        "deal", "deals", "purchase", "purchases", "invoice",
-    ],
-    "products": [
-        "product", "products", "item", "items", "sku", "catalog", "inventory",
-        "stock", "category", "categories", "margin", "margins", "supplier",
-        "cost", "price", "pricing",
-    ],
-    "customers": [
-        "customer", "customers", "client", "clients", "segment", "segments",
-        "enterprise", "smb", "individual", "buyer", "buyers", "account",
-        "accounts",
-    ],
-    "employees": [
-        "employee", "employees", "staff", "headcount", "payroll", "salary",
-        "salaries", "department", "departments", "hr", "hire", "performance",
-        "manager", "managers", "role", "roles",
-    ],
-    "transactions": [
-        "transaction", "transactions", "cash", "flow", "expense", "expenses",
-        "finance", "financial", "payment", "payments", "refund", "refunds",
-        "income", "cost", "costs", "budget",
-    ],
-}
-
-# query_type → likely collections (used as a tiebreaker / fallback)
-_TYPE_DEFAULTS = {
-    "metric": ["sales", "transactions"],
-    "ranking": ["sales", "products"],
-    "comparison": ["sales", "customers"],
-    "list": ["sales"],
-    "lookup": ["customers", "products", "employees"],
-    "smalltalk": [],
-}
-
-# Entity type → collection that needs to be included for joins
-_ENTITY_COLLECTION = {
-    "customer": "customers",
-    "product": "products",
-    "employee": "employees",
+    "orders":       ["order", "sale", "revenue", "purchase", "invoice", "deal", "sold"],
+    "products":     ["product", "item", "sku", "catalog", "inventory", "stock",
+                     "category", "margin", "price"],
+    "customers":    ["customer", "client", "segment", "enterprise", "smb", "individual",
+                     "buyer", "account", "company"],
+    "contacts":     ["contact", "ceo", "cto", "cfo", "person", "who", "director",
+                     "manager", "executive"],
+    "employees":    ["employee", "staff", "headcount", "payroll", "salary", "department",
+                     "hr", "performance", "quota", "rep"],
+    "transactions": ["transaction", "cash", "flow", "expense", "finance", "payment",
+                     "refund", "income", "budget"],
+    "suppliers":    ["supplier", "vendor", "manufacturer", "lead time", "supply"],
 }
 
 
-def select(intent: str, query_type: str, entities: list) -> list:
+async def select(intent: str, query_type: str, entities: list, db=None) -> list:
     """Return a list of 1-3 collection names relevant to the query.
 
     Args:
-        intent: short description from the analyzer
+        intent:     short description from the analyzer
         query_type: one of smalltalk|lookup|list|metric|ranking|comparison
-        entities: list of entity dicts from the analyzer
+        entities:   list of entity dicts from the analyzer
+        db:         pymongo Database instance (used for dynamic schema summaries)
 
     Returns:
         Ordered list of collection names (primary first)
@@ -63,38 +41,93 @@ def select(intent: str, query_type: str, entities: list) -> list:
     if query_type == "smalltalk":
         return []
 
-    tokens = _tokenize(intent)
-    scored: dict[str, int] = {col: 0 for col in ALL_COLLECTIONS}
+    # Build entity-based boost set
+    entity_collections: set[str] = set()
+    for e in entities:
+        etype = e.get("type", "").lower()
+        if etype in ("contact", "person"):
+            entity_collections.update(["contacts", "orders", "customers"])
+        elif etype == "customer":
+            entity_collections.update(["customers", "orders"])
+        elif etype == "product":
+            entity_collections.update(["products", "orders"])
+        elif etype == "employee":
+            entity_collections.add("employees")
+        elif etype == "supplier":
+            entity_collections.update(["suppliers", "products"])
 
-    # Score by keyword matching
-    for col, keywords in _KEYWORD_MAP.items():
-        for kw in keywords:
+    # Attempt LLM-based selection using live schema summaries
+    summaries: dict = {}
+    if db is not None:
+        try:
+            from db import get_extractor
+            extractor = get_extractor()
+            summaries = extractor.all_summaries()
+        except Exception:
+            pass
+
+    if summaries:
+        selected = await _llm_select(intent, summaries, entity_collections)
+        if selected:
+            return selected[:3]
+
+    # Fallback: keyword matching
+    return _keyword_select(intent, query_type, entity_collections)
+
+
+async def _llm_select(intent: str, summaries: dict, entity_boost: set) -> list:
+    summary_lines = "\n".join(f"- {line}" for line in summaries.values())
+    prompt = (
+        "You are selecting MongoDB collections to answer a business question.\n\n"
+        f"Available collections:\n{summary_lines}\n\n"
+        f'Question intent: "{intent}"\n\n'
+        "Return ONLY a JSON array of 1-3 collection names, ordered by relevance.\n"
+        'Example: ["orders", "customers"]\n'
+        "No explanation, no markdown."
+    )
+
+    try:
+        resp = await _groq.chat.completions.create(
+            model=MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=60,
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+        match = re.search(r'\[.*?\]', raw, re.DOTALL)
+        if match:
+            cols  = json.loads(match.group())
+            valid = list(summaries.keys())
+            result = [c for c in cols if c in valid]
+            # Add entity-boosted collections not already present
+            for ec in entity_boost:
+                if ec in valid and ec not in result:
+                    result.append(ec)
+            return result[:3]
+    except Exception:
+        pass
+    return []
+
+
+def _keyword_select(intent: str, query_type: str, entity_boost: set) -> list:
+    tokens = set(re.findall(r"[a-z]+", intent.lower()))
+    scored = {col: 0 for col in _KEYWORD_MAP}
+    for col, kws in _KEYWORD_MAP.items():
+        for kw in kws:
             if kw in tokens:
                 scored[col] += 1
-
-    # Boost collections implied by entity types
-    for entity in entities:
-        etype = entity.get("type", "").lower()
-        implied = _ENTITY_COLLECTION.get(etype)
-        if implied:
-            scored[implied] += 2
-
-    # Apply query_type defaults as a weak prior (score +1 for each default)
-    for col in _TYPE_DEFAULTS.get(query_type, []):
-        scored[col] += 1
-
-    # Keep collections with score > 0, sorted descending
-    selected = [col for col, s in sorted(scored.items(), key=lambda x: -x[1]) if s > 0]
-
+    for ec in entity_boost:
+        if ec in scored:
+            scored[ec] += 3
+    selected = [c for c, s in sorted(scored.items(), key=lambda x: -x[1]) if s > 0]
     if not selected:
-        # Absolute fallback
-        selected = _TYPE_DEFAULTS.get(query_type, ["sales"])
-
-    # Limit to top 3 to keep prompts focused
+        # Fallback defaults by query type
+        defaults = {
+            "metric":     ["orders", "transactions"],
+            "ranking":    ["orders", "products"],
+            "comparison": ["orders", "customers"],
+            "list":       ["orders"],
+            "lookup":     ["customers", "products", "employees"],
+        }
+        selected = defaults.get(query_type, ["orders"])
     return selected[:3]
-
-
-def _tokenize(text: str) -> set:
-    """Lowercase word tokens from a string."""
-    import re
-    return set(re.findall(r"[a-z]+", text.lower()))

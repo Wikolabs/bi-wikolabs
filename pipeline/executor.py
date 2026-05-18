@@ -1,5 +1,7 @@
 """Step 5: Execute & Validate with retry — run MQL and self-correct on failure."""
 
+from bson import ObjectId
+
 from pipeline.mql_generator import generate
 
 MAX_RETRIES = 3
@@ -18,12 +20,12 @@ async def execute_with_retry(
     On failure, feeds the error back to the MQL generator for self-correction.
 
     Args:
-        spec: MQL specification dict (from mql_generator.generate)
-        question: original user question
-        analysis: output from analyzer.analyze()
+        spec:        MQL specification dict (from mql_generator.generate)
+        question:    original user question
+        analysis:    output from analyzer.analyze()
         collections: selected collection names
-        entity_map: resolved entities
-        db: pymongo Database instance
+        entity_map:  resolved entities
+        db:          pymongo Database instance
 
     Returns:
         list of result documents
@@ -57,26 +59,39 @@ async def execute_with_retry(
     raise RuntimeError(f"Query failed. Last error: {last_error}")
 
 
+def _convert_oids(obj):
+    """Recursively convert {"$oid": "..."} dicts to ObjectId instances."""
+    if isinstance(obj, dict):
+        keys = list(obj.keys())
+        if keys == ["$oid"]:
+            return ObjectId(obj["$oid"])
+        return {k: _convert_oids(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_convert_oids(item) for item in obj]
+    return obj
+
+
 def _execute(spec: dict, db) -> list:
     """Execute a single MQL spec against the database."""
     collection_name = spec.get("collection")
     if not collection_name:
         raise ValueError("MQL spec missing 'collection' field")
 
-    col = db[collection_name]
+    col       = db[collection_name]
     operation = spec.get("operation", "find")
 
     if operation == "aggregate":
         pipeline = spec.get("pipeline")
         if not isinstance(pipeline, list):
             raise ValueError("Aggregation spec missing valid 'pipeline' list")
+        pipeline = _convert_oids(pipeline)
         return list(col.aggregate(pipeline))
 
     if operation == "find":
-        filt = spec.get("filter", {})
+        filt       = _convert_oids(spec.get("filter", {}))
         projection = spec.get("projection", {})
-        limit = int(spec.get("limit", 50))
-        cursor = col.find(filt, projection)
+        limit      = int(spec.get("limit", 50))
+        cursor     = col.find(filt, projection)
         if limit:
             cursor = cursor.limit(limit)
         return list(cursor)

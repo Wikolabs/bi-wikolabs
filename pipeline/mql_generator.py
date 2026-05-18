@@ -5,7 +5,6 @@ import os
 import re
 
 from groq import AsyncGroq
-from schemas import SCHEMAS
 
 _groq = AsyncGroq(api_key=os.getenv("GROQ_API_KEY"))
 MODEL = "llama-3.3-70b-versatile"
@@ -13,8 +12,8 @@ MODEL = "llama-3.3-70b-versatile"
 # Per-query-type few-shot examples to guide the model
 _EXAMPLES = {
     "metric": """Example:
-User: "What is the total revenue from completed sales?"
-{"collection": "sales", "operation": "aggregate", "pipeline": [
+User: "What is the total revenue from completed orders?"
+{"collection": "orders", "operation": "aggregate", "pipeline": [
   {"$match": {"status": "completed"}},
   {"$group": {"_id": null, "total_revenue": {"$sum": "$total_amount"}}},
   {"$project": {"_id": 0, "total_revenue": {"$round": ["$total_revenue", 2]}}}
@@ -22,21 +21,21 @@ User: "What is the total revenue from completed sales?"
 
     "ranking": """Example:
 User: "Top 5 products by revenue"
-{"collection": "sales", "operation": "aggregate", "pipeline": [
+{"collection": "orders", "operation": "aggregate", "pipeline": [
   {"$match": {"status": "completed"}},
   {"$group": {"_id": "$product_id", "revenue": {"$sum": "$total_amount"}}},
   {"$sort": {"revenue": -1}},
   {"$limit": 5},
-  {"$lookup": {"from": "products", "localField": "_id", "foreignField": "product_id", "as": "p"}},
+  {"$lookup": {"from": "products", "localField": "_id", "foreignField": "_id", "as": "p"}},
   {"$unwind": "$p"},
-  {"$project": {"_id": 0, "name": "$p.name", "revenue": {"$round": ["$revenue", 2]}}}
+  {"$project": {"_id": 0, "product": "$p.name", "category": "$p.category", "revenue": {"$round": ["$revenue", 2]}}}
 ]}""",
 
     "comparison": """Example:
 User: "Compare revenue by customer segment"
-{"collection": "sales", "operation": "aggregate", "pipeline": [
+{"collection": "orders", "operation": "aggregate", "pipeline": [
   {"$match": {"status": "completed"}},
-  {"$lookup": {"from": "customers", "localField": "customer_id", "foreignField": "customer_id", "as": "c"}},
+  {"$lookup": {"from": "customers", "localField": "customer_id", "foreignField": "_id", "as": "c"}},
   {"$unwind": "$c"},
   {"$group": {"_id": "$c.segment", "revenue": {"$sum": "$total_amount"}, "orders": {"$sum": 1}}},
   {"$project": {"_id": 0, "segment": "$_id", "revenue": {"$round": ["$revenue", 2]}, "orders": 1}},
@@ -48,37 +47,80 @@ User: "List all active products in the Electronics category"
 {"collection": "products", "operation": "find", "filter": {"category": "Electronics", "is_active": true}, "limit": 50}""",
 
     "lookup": """Example:
-User: "Show details for customer Acme Corp"
-{"collection": "customers", "operation": "find", "filter": {"name": {"$regex": "Acme Corp", "$options": "i"}}, "limit": 1}""",
+User: "Show all orders from Acme Global Corp" (already resolved to ObjectId abc123)
+{"collection": "orders", "operation": "aggregate", "pipeline": [
+  {"$match": {"customer_id": {"$oid": "abc123"}, "status": "completed"}},
+  {"$project": {"_id": 0, "order_number": 1, "product_name": 1, "total_amount": 1, "order_date": 1, "status": 1}},
+  {"$sort": {"order_date": -1}},
+  {"$limit": 20}
+]}""",
 }
 
 
 def _build_schema_context(collections: list) -> str:
-    lines = ["RELEVANT COLLECTION SCHEMAS:"]
-    for col in collections:
-        schema = SCHEMAS.get(col, f"{col}: (schema unavailable)")
-        lines.append(f"\n{col}:\n{schema}")
-    return "\n".join(lines)
+    """Build schema context using the dynamic extractor; fall back to static SCHEMAS."""
+    try:
+        from db import get_extractor
+        extractor = get_extractor()
+        lines = ["RELEVANT COLLECTION SCHEMAS:"]
+        for col in collections:
+            lines.append(extractor.to_prompt(col))
+        return "\n".join(lines)
+    except Exception:
+        from schemas import SCHEMAS
+        lines = ["RELEVANT COLLECTION SCHEMAS:"]
+        for col in collections:
+            lines.append(f"{col}:\n{SCHEMAS.get(col, '(unavailable)')}")
+        return "\n".join(lines)
 
 
 def _build_entity_context(entity_map: dict) -> str:
     if not entity_map:
         return ""
-    lines = ["RESOLVED ENTITIES (use these exact IDs/names in filters):"]
+    lines = ["RESOLVED ENTITIES (use these exact ObjectIds in filters):"]
     for original, info in entity_map.items():
-        if info.get("resolved"):
+        if not info.get("resolved"):
+            lines.append(f"  '{original}' → NOT FOUND — use regex filter on name field")
+            continue
+        etype   = info.get("type")
+        name    = info.get("name", original)
+        oid     = info.get("_id")
+
+        if etype == "customer":
+            lines.append(f"  '{original}' → customer '{name}', _id={oid}")
+            lines.append(f'    Filter on orders: {{"customer_id": {{"$oid": "{oid}"}}}}')
+        elif etype == "contact":
+            company_id = info.get("company_id")
             lines.append(
-                f"  - '{original}' → name='{info['name']}', id='{info['id']}'"
+                f"  '{original}' → contact '{name}' ({info.get('title', '')}) "
+                f"at {info.get('company_name', '')}"
             )
+            if company_id:
+                lines.append(
+                    f'    To find their orders: {{"customer_id": {{"$oid": "{company_id}"}}}}'
+                )
+        elif etype == "employee":
+            lines.append(
+                f"  '{original}' → employee '{name}' "
+                f"({info.get('role', '')}, {info.get('department', '')}), _id={oid}"
+            )
+            lines.append(f'    Filter on orders:    {{"account_manager_id": {{"$oid": "{oid}"}}}}')
+            lines.append(f'    Filter on employees: {{"_id": {{"$oid": "{oid}"}}}}')
+        elif etype == "product":
+            lines.append(f"  '{original}' → product '{name}', _id={oid}")
+            lines.append(f'    Filter on orders: {{"product_id": {{"$oid": "{oid}"}}}}')
+        elif etype == "supplier":
+            lines.append(f"  '{original}' → supplier '{name}', _id={oid}")
+            lines.append(f'    Filter on products: {{"supplier_id": {{"$oid": "{oid}"}}}}')
         else:
-            lines.append(f"  - '{original}' → not found in DB, use as regex filter")
+            lines.append(f"  '{original}' → {etype} '{name}', _id={oid}")
     return "\n".join(lines)
 
 
 def _build_system_prompt(collections: list, entity_map: dict, query_type: str) -> str:
     schema_ctx = _build_schema_context(collections)
     entity_ctx = _build_entity_context(entity_map)
-    example = _EXAMPLES.get(query_type, _EXAMPLES["metric"])
+    example    = _EXAMPLES.get(query_type, _EXAMPLES["metric"])
 
     parts = [
         "You are a MongoDB query generator for BI Wikolabs (database: bi_wikolabs).",
@@ -92,15 +134,17 @@ def _build_system_prompt(collections: list, entity_map: dict, query_type: str) -
     parts += [
         "",
         "RULES:",
+        '- Use {"$oid": "..."} syntax for ObjectId fields — the executor converts them automatically.',
+        "- For $lookup joins, match on _id fields (not string IDs): localField/_id → foreignField/_id",
         "- Use aggregation pipelines for analytics (grouping, sums, averages, trends)",
-        "- Use $lookup to join collections when needed",
+        "- For A→B→C join chains: $lookup A→B, $unwind, then $lookup B→C, $unwind",
         "- For date formatting use $dateToString with format '%Y-%m'",
         "- Do NOT use JavaScript ISODate() — use plain ISO strings for $match date filters",
-        "- In $project, ALWAYS rename _id to a meaningful field (e.g. region, segment, category, month) — never leave _id unnamed or set to 0 without renaming it first",
+        "- In $project, ALWAYS rename _id to a meaningful field (e.g. region, segment, category, month)",
         "- Return ONLY valid JSON, no explanation, no markdown fences",
         "",
         "OUTPUT FORMAT (aggregation):",
-        '{"collection": "sales", "operation": "aggregate", "pipeline": [...]}',
+        '{"collection": "orders", "operation": "aggregate", "pipeline": [...]}',
         "",
         "OUTPUT FORMAT (simple find):",
         '{"collection": "customers", "operation": "find", "filter": {}, "limit": 20}',
@@ -121,16 +165,18 @@ async def generate(
     """Generate a MongoDB query specification.
 
     Args:
-        question: original user question
-        analysis: output from analyzer.analyze()
-        collections: selected collections from collection_selector.select()
-        entity_map: resolved entities from entity_resolver.resolve()
+        question:      original user question
+        analysis:      output from analyzer.analyze()
+        collections:   selected collections from collection_selector.select()
+        entity_map:    resolved entities from entity_resolver.resolve()
         error_context: optional previous error to guide self-correction
 
     Returns:
         dict with keys: collection, operation, and either pipeline or filter+limit
     """
-    system_prompt = _build_system_prompt(collections, entity_map, analysis.get("query_type", "metric"))
+    system_prompt = _build_system_prompt(
+        collections, entity_map, analysis.get("query_type", "metric")
+    )
 
     user_content = f"Intent: {analysis.get('intent', question)}\nQuestion: {question}"
     if error_context:
@@ -140,7 +186,7 @@ async def generate(
         model=MODEL,
         messages=[
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
+            {"role": "user",   "content": user_content},
         ],
         temperature=0,
         max_tokens=1024,
@@ -155,4 +201,6 @@ async def generate(
     try:
         return json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise ValueError(f"MQL generator returned unparseable response: {raw[:200]}") from exc
+        raise ValueError(
+            f"MQL generator returned unparseable response: {raw[:200]}"
+        ) from exc
