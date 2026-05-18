@@ -1,7 +1,11 @@
 import json
 import chainlit as cl
+import chainlit.data as cl_data
+from data_layer import SQLiteDataLayer
 from agent import run_bi_agent, format_answer
 from pipelines import match_pipeline
+
+cl_data._data_layer = SQLiteDataLayer("/data/threads.db")
 
 WELCOME = """# 📊 BI Wikolabs — Enterprise Intelligence Agent
 
