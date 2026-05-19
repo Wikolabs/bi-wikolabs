@@ -9,9 +9,13 @@ Key design decisions vs the old SQLiteDataLayer:
 from __future__ import annotations
 
 import json
+import logging
+import traceback as tb
 import uuid
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
+
+log = logging.getLogger(__name__)
 
 from chainlit.data import BaseDataLayer
 from chainlit.types import Feedback, Pagination, PaginatedResponse, ThreadDict, ThreadFilter
@@ -175,63 +179,85 @@ class PostgresDataLayer(BaseDataLayer):
     async def list_threads(
         self, pagination: Pagination, filters: ThreadFilter
     ) -> PaginatedResponse[ThreadDict]:
-        pool = await self._pool()
-        cursor = getattr(pagination, "cursor", None)
+        try:
+            return await self._list_threads_impl(pagination, filters)
+        except Exception:
+            log.error("list_threads failed:\n%s", tb.format_exc())
+            raise
 
+    async def _list_threads_impl(
+        self, pagination: Pagination, filters: ThreadFilter
+    ) -> PaginatedResponse[ThreadDict]:
+        # Support both Pydantic models (Chainlit 2.x) and TypedDicts/dicts (Chainlit 1.x)
+        if isinstance(pagination, dict):
+            page_size = int(pagination.get("first") or 20)
+            cursor    = pagination.get("cursor")
+        else:
+            page_size = int(getattr(pagination, "first", None) or 20)
+            cursor    = getattr(pagination, "cursor", None)
+
+        if filters is None or isinstance(filters, dict):
+            user_id_filter = (filters or {}).get("userId")
+        else:
+            user_id_filter = getattr(filters, "userId", None)
+
+        pool = await self._pool()
         async with pool.acquire() as conn:
-            # Resolve cursor to a timestamp for keyset pagination
             cursor_ts = None
             if cursor:
                 cursor_ts = await conn.fetchval(
                     "SELECT updated_at FROM chat_threads WHERE id = $1", cursor
                 )
 
-            base_where = "t.deleted = FALSE"
+            conditions = ["t.deleted = FALSE"]
             params: list = []
             idx = 1
 
-            if filters.userId:
-                base_where += f" AND t.user_id = ${idx}"
-                params.append(filters.userId)
+            if user_id_filter:
+                conditions.append(f"t.user_id = ${idx}")
+                params.append(user_id_filter)
                 idx += 1
 
             if cursor_ts:
-                base_where += f" AND t.updated_at < ${idx}"
+                conditions.append(f"t.updated_at < ${idx}")
                 params.append(cursor_ts)
                 idx += 1
 
-            params.append(pagination.first + 1)
-            limit_idx = idx
+            params.append(page_size + 1)
+            where_clause = " AND ".join(conditions)
 
             rows = await conn.fetch(
                 f"""
                 SELECT t.*, u.identifier AS user_identifier
                 FROM chat_threads t
                 LEFT JOIN chat_users u ON u.id = t.user_id
-                WHERE {base_where}
+                WHERE {where_clause}
                 ORDER BY t.updated_at DESC
-                LIMIT ${limit_idx}
+                LIMIT ${idx}
                 """,
                 *params,
             )
 
-        has_next = len(rows) > pagination.first
-        rows     = rows[: pagination.first]
+        has_next = len(rows) > page_size
+        rows     = rows[:page_size]
 
-        threads = [
-            ThreadDict(
-                id=r["id"],
-                name=r["name"] or "New conversation",
-                createdAt=r["created_at"].isoformat(),
-                userId=r["user_id"],
-                userIdentifier=r["user_identifier"],
-                metadata=dict(r["metadata"]) if r["metadata"] else {},
-                steps=[],
-                elements=[],
-                tags=list(r["tags"]) if r["tags"] else [],
-            )
-            for r in rows
-        ]
+        threads: List[ThreadDict] = []
+        for r in rows:
+            try:
+                threads.append(ThreadDict(
+                    id=r["id"],
+                    name=r["name"] or "New conversation",
+                    createdAt=r["created_at"].isoformat(),
+                    userId=r["user_id"],
+                    userIdentifier=r["user_identifier"],
+                    metadata=dict(r["metadata"]) if r["metadata"] else {},
+                    steps=[],
+                    elements=[],
+                    tags=list(r["tags"]) if r["tags"] else [],
+                ))
+            except Exception:
+                log.warning("Skipped malformed thread row %s:\n%s", r.get("id"), tb.format_exc())
+
         return PaginatedResponse(
             data=threads,
             pageInfo={

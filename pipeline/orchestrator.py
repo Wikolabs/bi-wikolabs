@@ -127,7 +127,9 @@ async def _run_single(question: str, db) -> tuple[list, dict, list[str]]:
         select(intent, query_type, entities, db=db),
     )
     if not collections:
-        collections = ["orders"]
+        from schema_registry import get_all_summaries
+        summaries = await get_all_summaries()
+        collections = list(summaries.keys())[:1] if summaries else []
 
     spec = await generate(question=question, analysis=analysis,
                           collections=collections, entity_map=entity_map)
@@ -184,7 +186,9 @@ async def run(
             select(intent, query_type, entities, db=db),
         )
         if not collections:
-            collections = ["orders"]
+            from schema_registry import get_all_summaries
+            summaries = await get_all_summaries()
+            collections = list(summaries.keys())[:1] if summaries else []
 
         spec = await generate(question=question, analysis=analysis,
                               collections=collections, entity_map=entity_map)
