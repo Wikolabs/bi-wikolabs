@@ -28,13 +28,7 @@ os.makedirs(EXPORT_DIR, exist_ok=True)
 
 @cl.on_chat_start
 async def start():
-    # Run DB migrations and initial schema scan on first chat (idempotent)
-    try:
-        from migrations import run_migrations
-        await run_migrations()
-    except Exception as exc:
-        logger.error("Migration error: %s", exc)
-
+    # Migrations run automatically in get_pg_pool() on first DB access.
     try:
         from schema_registry import needs_refresh, refresh_all
         if await needs_refresh():

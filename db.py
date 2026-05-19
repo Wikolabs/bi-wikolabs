@@ -68,6 +68,13 @@ async def get_pg_pool() -> asyncpg.Pool:
                 max_size=10,
                 init=register_vector,
             )
+
+            # Run migrations immediately after pool creation so tables exist
+            # before the very first query (e.g. list_threads fires on page load,
+            # before on_chat_start has a chance to run them).
+            from migrations import run_migrations
+            await run_migrations()
+
     return _pg_pool
 
 
