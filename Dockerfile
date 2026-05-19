@@ -9,7 +9,7 @@ WORKDIR /app
 COPY pyproject.toml uv.lock* ./
 
 # Install production deps into the system Python (no separate venv needed in Docker)
-RUN uv pip install --system --no-cache .
+RUN uv pip install --system --no-cache -r pyproject.toml
 
 COPY . .
 
