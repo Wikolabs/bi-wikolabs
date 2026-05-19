@@ -1,0 +1,32 @@
+name: Diagnostics — Live Container Logs
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnostics:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch container logs and status from VPS
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: root
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            echo "========================================"
+            echo "  docker compose ps"
+            echo "========================================"
+            cd /opt/bi-wikolabs && docker compose ps 2>&1
+
+            echo ""
+            echo "========================================"
+            echo "  docker compose logs --tail=200 app"
+            echo "========================================"
+            cd /opt/bi-wikolabs && docker compose logs --tail=200 app 2>&1
+
+            echo ""
+            echo "========================================"
+            echo "  docker compose logs --tail=50 postgres"
+            echo "========================================"
+            cd /opt/bi-wikolabs && docker compose logs --tail=50 postgres 2>&1
