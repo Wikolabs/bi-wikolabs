@@ -1,7 +1,10 @@
 """PostgreSQL-backed data layer for Chainlit thread history.
 
 Key design decisions vs the old SQLiteDataLayer:
-- Pass Python dicts/lists directly to JSONB columns (no json.dumps — asyncpg has its own codec)
+- Always pass JSONB columns as json.dumps() strings with explicit ::jsonb cast in SQL.
+  asyncpg's JSONB encoder behaviour varies by version; the ::jsonb cast forces PostgreSQL
+  to own the JSON parsing, which is always reliable.
+- Always read JSONB columns via _jsonb() which handles both str and dict returns from asyncpg.
 - Pass Python datetime objects to TIMESTAMPTZ columns (not ISO strings)
 - Use COALESCE($n::jsonb, col) for nullable JSONB updates so NULL means "keep existing"
 """
@@ -43,6 +46,20 @@ def _parse_dt(value) -> datetime:
     return _now_dt()
 
 
+def _jsonb(value) -> dict:
+    """Safely convert an asyncpg JSONB result to a plain dict.
+
+    asyncpg may return JSONB columns as a Python dict (decoded) or as a JSON
+    string (when no explicit ::jsonb cast was used on the parameter side).
+    This helper handles both without crashing.
+    """
+    if not value:
+        return {}
+    if isinstance(value, str):
+        return json.loads(value)
+    return dict(value)
+
+
 def _serialize(value) -> str:
     """Serialize step input/output to plain text for storage."""
     if isinstance(value, (dict, list)):
@@ -62,7 +79,7 @@ def _step_dict(s) -> Dict:
         "name":          s["name"] or "",
         "input":         s["input_"] or "",
         "output":        s["output"] or "",
-        "metadata":      dict(s["metadata"]) if s["metadata"] else {},
+        "metadata":      _jsonb(s["metadata"]),
         "createdAt":     s["created_at"].isoformat(),
         "isError":       bool(s["is_error"]),
         "streaming":     False,
@@ -96,7 +113,7 @@ class PostgresDataLayer(BaseDataLayer):
         return PersistedUser(
             id=row["id"],
             identifier=row["identifier"],
-            metadata=dict(row["metadata"]) if row["metadata"] else {},
+            metadata=_jsonb(row["metadata"]),
             createdAt=row["created_at"].isoformat(),
         )
 
@@ -107,7 +124,7 @@ class PostgresDataLayer(BaseDataLayer):
             await conn.execute(
                 """
                 INSERT INTO chat_users (id, identifier, metadata)
-                VALUES ($1, $2, $3)
+                VALUES ($1, $2, $3::jsonb)
                 ON CONFLICT (identifier) DO NOTHING
                 """,
                 uid, user.identifier, json.dumps(user.metadata or {}),
@@ -118,7 +135,7 @@ class PostgresDataLayer(BaseDataLayer):
         return PersistedUser(
             id=row["id"],
             identifier=row["identifier"],
-            metadata=dict(row["metadata"]) if row["metadata"] else {},
+            metadata=_jsonb(row["metadata"]),
             createdAt=row["created_at"].isoformat(),
         )
 
@@ -296,7 +313,7 @@ class PostgresDataLayer(BaseDataLayer):
             createdAt=t["created_at"].isoformat(),
             userId=t["user_id"],
             userIdentifier=t["user_identifier"],
-            metadata=dict(t["metadata"]) if t["metadata"] else {},
+            metadata=_jsonb(t["metadata"]),
             tags=list(t["tags"]) if t["tags"] else [],
             elements=[],
             steps=[_step_dict(s) for s in steps],
