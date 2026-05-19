@@ -35,6 +35,7 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
+      - PYTHONPATH=/app
       - MONGODB_URI
       - POSTGRES_URI=postgresql://bi:${POSTGRES_PASSWORD}@postgres:5432/bi_wikolabs
       - CHAINLIT_AUTH_SECRET
