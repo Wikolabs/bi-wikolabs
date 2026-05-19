@@ -24,7 +24,11 @@ _SYSTEM = """You are a query analyzer for a business intelligence system.
 Classify the user question and extract named entities.
 
 Query types:
-- smalltalk  : greetings, thanks, "who are you", "what can you do", general chat
+- smalltalk  : greetings, thanks, "who are you", "what can you do", general chat,
+               AND any meta-question about the system itself: "what can I ask?",
+               "give me example questions", "what charts can I get?", "help me",
+               "how does this work?", "what questions work for pie charts?",
+               "suggest some queries", "what data do you have?"
 - lookup     : fetch details about a specific named entity
 - list       : list multiple records (no ranking by numeric value)
 - metric     : a single aggregated KPI (total, average, count)
@@ -39,6 +43,9 @@ Entity types:
 - supplier  : a product supplier / vendor
 - region    : a geographic region
 - person    : a named person (unclear if contact or employee)
+
+IMPORTANT: If the user is asking FOR SUGGESTIONS or asking WHAT TO ASK (meta-questions
+about the BI system's capabilities), always classify as smalltalk.
 
 Set is_why_question=true if the question asks "why" or requests a root-cause explanation."""
 

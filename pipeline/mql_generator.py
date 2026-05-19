@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 _groq = instructor.from_groq(
     AsyncGroq(api_key=os.getenv("GROQ_API_KEY")),
-    mode=instructor.Mode.TOOLS,
+    mode=instructor.Mode.JSON_SCHEMA,  # JSON_SCHEMA prevents multiple tool-call responses
 )
 MODEL = "llama-3.3-70b-versatile"
 
@@ -176,6 +176,7 @@ async def _build_system_prompt(
     parts += [
         "",
         "RULES:",
+        "- Generate EXACTLY ONE MongoDB query for the specific question asked. Do not generate multiple queries.",
         '- Use {"$oid":"..."} syntax for ObjectId fields — executor converts them automatically.',
         "- Use $lookup + $unwind for joins; always match on _id fields.",
         "- Use aggregation pipelines for analytics (sums, averages, trends, rankings).",

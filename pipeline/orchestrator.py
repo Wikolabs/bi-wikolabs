@@ -153,6 +153,18 @@ async def _run_single(question: str, db) -> tuple[list, dict, list[str]]:
     return results, spec, collections
 
 
+_META_PATTERNS = re.compile(
+    r'\b(what (questions?|can i ask|should i ask)|'
+    r'give me (some |example |sample )?(questions?|queries|ideas)|'
+    r'suggest (some |a )?(questions?|queries)|'
+    r'(how|what).{0,30}(pie chart|bar chart|line chart|chart|graph|visual)|'
+    r'what (data|info|information) (do you have|can you show)|'
+    r'help me (ask|query|understand)|'
+    r'(example|sample) (questions?|queries?))\b',
+    re.IGNORECASE,
+)
+
+
 async def run(
     question: str,
 ) -> tuple[str, Optional[go.Figure], Optional[pd.DataFrame], dict, list[str]]:
@@ -165,6 +177,10 @@ async def run(
     can save a golden record when the result is confirmed correct.
     """
     db = get_client_db()
+
+    # Short-circuit meta-questions before they reach the MQL generator
+    if _META_PATTERNS.search(question):
+        return await _greeting(), None, None, {}, []
 
     sub_questions = await _decompose(question)
 
