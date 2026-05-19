@@ -1,7 +1,9 @@
 """PostgreSQL-backed data layer for Chainlit thread history.
 
-Replaces the previous SQLiteDataLayer. All data lives in our internal
-PostgreSQL database — never in the client's MongoDB.
+Key design decisions vs the old SQLiteDataLayer:
+- Pass Python dicts/lists directly to JSONB columns (no json.dumps — asyncpg has its own codec)
+- Pass Python datetime objects to TIMESTAMPTZ columns (not ISO strings)
+- Use COALESCE($n::jsonb, col) for nullable JSONB updates so NULL means "keep existing"
 """
 
 from __future__ import annotations
@@ -16,11 +18,29 @@ from chainlit.types import Feedback, Pagination, PaginatedResponse, ThreadDict, 
 from chainlit.user import PersistedUser, User
 
 
+def _now_dt() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return _now_dt().isoformat()
+
+
+def _parse_dt(value) -> datetime:
+    """Ensure we always pass a timezone-aware datetime to asyncpg TIMESTAMPTZ columns."""
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str):
+        try:
+            dt = datetime.fromisoformat(value)
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    return _now_dt()
 
 
 def _serialize(value) -> str:
+    """Serialize step input/output to plain text for storage."""
     if isinstance(value, (dict, list)):
         return json.dumps(value, default=str)
     if isinstance(value, str):
@@ -54,7 +74,7 @@ class PostgresDataLayer(BaseDataLayer):
 
     async def create_user(self, user: User) -> Optional[PersistedUser]:
         pool = await self._pool()
-        uid = str(uuid.uuid4())
+        uid  = str(uuid.uuid4())
         async with pool.acquire() as conn:
             await conn.execute(
                 """
@@ -62,7 +82,7 @@ class PostgresDataLayer(BaseDataLayer):
                 VALUES ($1, $2, $3)
                 ON CONFLICT (identifier) DO NOTHING
                 """,
-                uid, user.identifier, json.dumps(user.metadata or {}),
+                uid, user.identifier, user.metadata or {},
             )
             row = await conn.fetchrow(
                 "SELECT * FROM chat_users WHERE identifier = $1", user.identifier
@@ -90,13 +110,14 @@ class PostgresDataLayer(BaseDataLayer):
                 "SELECT 1 FROM chat_threads WHERE id = $1", thread_id
             )
             if exists:
+                # COALESCE($n::jsonb, col): NULL::jsonb → keep existing value
                 await conn.execute(
                     """
                     UPDATE chat_threads
-                    SET name      = COALESCE($2, name),
-                        user_id   = COALESCE($3, user_id),
-                        metadata  = COALESCE($4::jsonb, metadata),
-                        tags      = COALESCE($5::jsonb, tags),
+                    SET name       = COALESCE($2, name),
+                        user_id    = COALESCE($3, user_id),
+                        metadata   = COALESCE($4::jsonb, metadata),
+                        tags       = COALESCE($5::jsonb, tags),
                         updated_at = NOW()
                     WHERE id = $1
                     """,
@@ -104,13 +125,13 @@ class PostgresDataLayer(BaseDataLayer):
                     name,
                     user_id,
                     json.dumps(metadata) if metadata is not None else None,
-                    json.dumps(tags) if tags is not None else None,
+                    json.dumps(tags)     if tags     is not None else None,
                 )
             else:
                 await conn.execute(
                     """
                     INSERT INTO chat_threads (id, name, user_id, metadata, tags)
-                    VALUES ($1, $2, $3, $4, $5)
+                    VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)
                     """,
                     thread_id,
                     name or "New conversation",
@@ -162,7 +183,7 @@ class PostgresDataLayer(BaseDataLayer):
                 )
 
         has_next = len(rows) > pagination.first
-        rows = rows[: pagination.first]
+        rows     = rows[: pagination.first]
 
         threads = [
             ThreadDict(
@@ -181,7 +202,7 @@ class PostgresDataLayer(BaseDataLayer):
             data=threads,
             pageInfo={
                 "hasNextPage": has_next,
-                "startCursor": rows[0]["id"] if rows else None,
+                "startCursor": rows[0]["id"]  if rows else None,
                 "endCursor":   rows[-1]["id"] if rows else None,
             },
         )
@@ -190,7 +211,8 @@ class PostgresDataLayer(BaseDataLayer):
         pool = await self._pool()
         async with pool.acquire() as conn:
             t = await conn.fetchrow(
-                "SELECT * FROM chat_threads WHERE id = $1 AND deleted = FALSE", thread_id
+                "SELECT * FROM chat_threads WHERE id = $1 AND deleted = FALSE",
+                thread_id,
             )
             if not t:
                 return None
@@ -241,12 +263,13 @@ class PostgresDataLayer(BaseDataLayer):
             await conn.execute(
                 """
                 INSERT INTO chat_steps
-                    (id, thread_id, parent_id, type, name, input_, output, metadata, is_error, created_at)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                    (id, thread_id, parent_id, type, name,
+                     input_, output, metadata, is_error, created_at)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10)
                 ON CONFLICT (id) DO UPDATE
-                  SET output    = EXCLUDED.output,
-                      is_error  = EXCLUDED.is_error,
-                      metadata  = EXCLUDED.metadata
+                  SET output   = EXCLUDED.output,
+                      is_error = EXCLUDED.is_error,
+                      metadata = EXCLUDED.metadata
                 """,
                 step_dict.get("id", str(uuid.uuid4())),
                 step_dict.get("threadId"),
@@ -255,9 +278,9 @@ class PostgresDataLayer(BaseDataLayer):
                 step_dict.get("name"),
                 _serialize(step_dict.get("input", "")),
                 _serialize(step_dict.get("output", "")),
-                json.dumps(step_dict.get("metadata", {})),
+                json.dumps(step_dict.get("metadata", {})),   # string → ::jsonb
                 bool(step_dict.get("isError", False)),
-                step_dict.get("createdAt", _now()),
+                _parse_dt(step_dict.get("createdAt", _now())),
             )
 
     async def update_step(self, step_dict: Dict) -> None:
@@ -272,7 +295,8 @@ class PostgresDataLayer(BaseDataLayer):
         pool = await self._pool()
         async with pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT * FROM chat_steps WHERE thread_id = $1 AND favorite = TRUE", thread_id
+                "SELECT * FROM chat_steps WHERE thread_id = $1 AND favorite = TRUE",
+                thread_id,
             )
         return [dict(r) for r in rows]
 
@@ -280,7 +304,8 @@ class PostgresDataLayer(BaseDataLayer):
         pool = await self._pool()
         async with pool.acquire() as conn:
             await conn.execute(
-                "UPDATE chat_steps SET favorite = $1 WHERE id = $2", is_favorite, step_id
+                "UPDATE chat_steps SET favorite = $1 WHERE id = $2",
+                is_favorite, step_id,
             )
 
     # ── Elements ──────────────────────────────────────────────────────────────
@@ -297,15 +322,13 @@ class PostgresDataLayer(BaseDataLayer):
     # ── Feedback ──────────────────────────────────────────────────────────────
 
     async def upsert_feedback(self, feedback: Feedback) -> str:
-        fid = str(uuid.uuid4())
+        fid  = str(uuid.uuid4())
         pool = await self._pool()
         async with pool.acquire() as conn:
             await conn.execute(
                 """
                 INSERT INTO chat_feedbacks (id, step_id, value, comment)
                 VALUES ($1, $2, $3, $4)
-                ON CONFLICT (id) DO UPDATE
-                  SET value = EXCLUDED.value, comment = EXCLUDED.comment
                 """,
                 fid, feedback.forId, feedback.value, feedback.comment,
             )
@@ -314,7 +337,9 @@ class PostgresDataLayer(BaseDataLayer):
     async def delete_feedback(self, feedback_id: str) -> bool:
         pool = await self._pool()
         async with pool.acquire() as conn:
-            await conn.execute("DELETE FROM chat_feedbacks WHERE id = $1", feedback_id)
+            await conn.execute(
+                "DELETE FROM chat_feedbacks WHERE id = $1", feedback_id
+            )
         return True
 
     # ── Misc ──────────────────────────────────────────────────────────────────

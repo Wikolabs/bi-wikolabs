@@ -40,13 +40,17 @@ def _flatten(doc: dict, prefix: str = "") -> dict:
 
 def _type_name(value) -> str:
     from bson import ObjectId
-    if isinstance(value, bool):   return "bool"
-    if isinstance(value, int):    return "int"
-    if isinstance(value, float):  return "float"
-    if isinstance(value, str):    return "str"
+    # None must be first — isinstance(None, …) is always False but explicit is safer
+    if value is None:               return "null"
+    # bool before int — in Python bool is a subclass of int
+    if isinstance(value, bool):     return "bool"
+    if isinstance(value, int):      return "int"
+    if isinstance(value, float):    return "float"
+    if isinstance(value, str):      return "str"
+    if isinstance(value, list):     return "array"
+    if isinstance(value, dict):     return "object"
     if isinstance(value, ObjectId): return "oid"
     if isinstance(value, datetime): return "date"
-    if value is None:             return "null"
     return type(value).__name__
 
 

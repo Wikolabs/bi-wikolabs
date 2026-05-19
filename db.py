@@ -16,12 +16,21 @@ _pg_lock = asyncio.Lock()
 
 
 def get_client_db():
-    """Return the client's MongoDB database (read-only connection)."""
+    """Return the client's MongoDB database (read-only connection).
+
+    Tries get_default_database() first (works when the URI includes /dbname).
+    Falls back to MONGODB_DB env var, then to "bi_wikolabs", so bare URIs
+    like mongodb://host:27017 work without error.
+    """
     global _mongo_client
     if _mongo_client is None:
         uri = os.getenv("MONGODB_URI", "mongodb://mongo:27017")
         _mongo_client = MongoClient(uri, readPreference="secondaryPreferred")
-    return _mongo_client.get_default_database()
+    try:
+        return _mongo_client.get_default_database()
+    except Exception:
+        db_name = os.getenv("MONGODB_DB", "bi_wikolabs")
+        return _mongo_client[db_name]
 
 
 async def get_pg_pool() -> asyncpg.Pool:
