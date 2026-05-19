@@ -44,14 +44,21 @@ async def get_pg_pool() -> asyncpg.Pool:
         if _pg_pool is None:
             dsn = os.getenv("POSTGRES_URI")
 
-            # Bootstrap: install pgvector extension via a plain connection first.
-            # asyncpg's pool init=register_vector requires the 'vector' type to
-            # already exist — but migrations haven't run yet on a fresh database.
-            boot = await asyncpg.connect(dsn=dsn)
+            # Safety net: ensure pgvector extension exists before pool creation.
+            # The primary mechanism is initdb/01_extensions.sql (runs on fresh
+            # databases via /docker-entrypoint-initdb.d). This covers existing
+            # databases that pre-date that file.
             try:
-                await boot.execute("CREATE EXTENSION IF NOT EXISTS vector;")
-            finally:
-                await boot.close()
+                boot = await asyncpg.connect(dsn=dsn)
+                try:
+                    await boot.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+                finally:
+                    await boot.close()
+            except Exception as _ext_err:
+                import logging as _log
+                _log.getLogger(__name__).warning(
+                    "Could not ensure vector extension: %s", _ext_err
+                )
 
             from pgvector.asyncpg import register_vector
 
