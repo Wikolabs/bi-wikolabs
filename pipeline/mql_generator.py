@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 _groq = instructor.from_groq(
     AsyncGroq(api_key=os.getenv("GROQ_API_KEY")),
-    mode=instructor.Mode.JSON_SCHEMA,  # JSON_SCHEMA prevents multiple tool-call responses
+    mode=instructor.Mode.JSON,  # JSON mode prevents multiple tool-call responses
 )
 MODEL = "llama-3.3-70b-versatile"
 
