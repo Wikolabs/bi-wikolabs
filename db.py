@@ -42,10 +42,21 @@ async def get_pg_pool() -> asyncpg.Pool:
         _pg_lock = asyncio.Lock()
     async with _pg_lock:
         if _pg_pool is None:
+            dsn = os.getenv("POSTGRES_URI")
+
+            # Bootstrap: install pgvector extension via a plain connection first.
+            # asyncpg's pool init=register_vector requires the 'vector' type to
+            # already exist — but migrations haven't run yet on a fresh database.
+            boot = await asyncpg.connect(dsn=dsn)
+            try:
+                await boot.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+            finally:
+                await boot.close()
+
             from pgvector.asyncpg import register_vector
 
             _pg_pool = await asyncpg.create_pool(
-                dsn=os.getenv("POSTGRES_URI"),
+                dsn=dsn,
                 min_size=2,
                 max_size=10,
                 init=register_vector,
