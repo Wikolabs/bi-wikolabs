@@ -382,7 +382,7 @@ Chainlit's built-in `SQLiteDataLayer` has been replaced with a custom `PostgresD
 
 ```
 bi-wikolabs/
-├── app.py                      # Chainlit entry point — chat handlers, export actions
+├── app.py                      # Chainlit entry point — dynamic welcome, chat handlers, exports
 ├── db.py                       # DB connections: MongoDB (pymongo) + PostgreSQL (asyncpg pool)
 ├── data_layer.py               # PostgreSQL-backed Chainlit data layer (threads, steps, users)
 ├── schema_registry.py          # Dynamic schema extraction: MongoDB → PostgreSQL + embeddings
@@ -394,9 +394,6 @@ bi-wikolabs/
 ├── scheduler.py                # APScheduler nightly schema refresh job
 ├── exporter.py                 # Excel (.xlsx) and PDF export utilities
 ├── seed.py                     # MongoDB demo data seeder (Faker seed=42, deterministic)
-├── schemas.py                  # Static fallback schemas (used only if PostgreSQL is down)
-├── agent.py                    # Legacy simplified agent (not used in production)
-├── pipelines.py                # Pre-built analytics aggregation pipelines (reference)
 │
 ├── pipeline/                   # 6-step query pipeline
 │   ├── __init__.py

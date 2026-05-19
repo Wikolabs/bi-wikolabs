@@ -12,7 +12,7 @@ from pymongo import MongoClient
 
 _mongo_client: MongoClient | None = None
 _pg_pool: asyncpg.Pool | None = None
-_pg_lock = asyncio.Lock()
+_pg_lock: asyncio.Lock | None = None  # created lazily inside the running event loop
 
 
 def get_client_db():
@@ -35,9 +35,11 @@ def get_client_db():
 
 async def get_pg_pool() -> asyncpg.Pool:
     """Return the shared asyncpg connection pool to our internal PostgreSQL."""
-    global _pg_pool
+    global _pg_pool, _pg_lock
     if _pg_pool is not None:
         return _pg_pool
+    if _pg_lock is None:
+        _pg_lock = asyncio.Lock()
     async with _pg_lock:
         if _pg_pool is None:
             from pgvector.asyncpg import register_vector

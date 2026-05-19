@@ -49,7 +49,7 @@ async def start():
     except Exception as exc:
         logger.warning("Scheduler start skipped: %s", exc)
 
-    await cl.Message(content=_WELCOME).send()
+    await cl.Message(content=await _build_welcome()).send()
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -169,23 +169,48 @@ async def on_validate_result(action: cl.Action):
         await cl.Message(content="Could not save — please try again.").send()
 
 
-# ── Welcome message ───────────────────────────────────────────────────────────
+# ── Welcome message (dynamically built from live schema) ─────────────────────
 
-_WELCOME = """# 📊 BI Wikolabs — Enterprise Intelligence Agent
+_WELCOME_FALLBACK = """# BI Intelligence Agent
 
 Ask me anything about your business data in plain English.
 
-**Available analytics:**
+I'll automatically detect your data structure and answer questions about trends, rankings, comparisons, and specific records.
 
-| # | Analysis | Try asking |
-|---|---|---|
-| 1 | Revenue Trend | *"Show monthly revenue trend"* |
-| 2 | Top Products | *"What are the top 10 products by revenue?"* |
-| 3 | Customer Segments | *"Compare Enterprise vs SMB revenue"* |
-| 4 | Regional Performance | *"Sales breakdown by region"* |
-| 5 | HR Dashboard | *"Show headcount and payroll by department"* |
-| 6 | Cash Flow | *"Monthly cash flow for the last year"* |
-| 7 | Product Margins | *"Which product categories have the best margins?"* |
-
-Or ask any custom business question — I'll figure out the query.
+**Try asking:**
+- *"What are the top items by value?"*
+- *"Show me a monthly trend"*
+- *"Compare performance across categories"*
+- *"How many records match this condition?"*
 """
+
+async def _build_welcome() -> str:
+    try:
+        from schema_registry import get_all_summaries
+        summaries = await get_all_summaries()
+        if not summaries:
+            return _WELCOME_FALLBACK
+        rows = "\n".join(
+            f"| `{name}` | {summary[:70]}{'…' if len(summary) > 70 else ''} |"
+            for name, summary in sorted(summaries.items())
+        )
+        return f"""# BI Intelligence Agent
+
+Ask me anything about your business data in plain English.
+
+**Available collections:**
+
+| Collection | Description |
+|---|---|
+{rows}
+
+**Example questions:**
+- *"What are the top 10 entries by value?"*
+- *"Show trends over the last 12 months"*
+- *"Compare totals by category"*
+- *"List all records matching a condition"*
+
+Or describe any analysis — I'll build the query automatically.
+"""
+    except Exception:
+        return _WELCOME_FALLBACK

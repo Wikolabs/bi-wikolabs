@@ -58,6 +58,10 @@ jobs:
             # Start/rebuild containers; --remove-orphans cleans up old mongo container
             docker compose up -d --build --remove-orphans
 
+            # Restart Caddy so it re-resolves the 'app' service name on Docker's DNS.
+            # Without this, Caddy keeps stale DNS after the app container is rebuilt.
+            docker compose restart caddy
+
             # Wait for app to be healthy (up to 60 s)
             echo "Waiting for app to become healthy..."
             for i in $(seq 1 12); do

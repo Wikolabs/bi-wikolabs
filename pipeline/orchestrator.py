@@ -30,27 +30,49 @@ import os
 
 _groq = AsyncGroq(api_key=os.getenv("GROQ_API_KEY"))
 
-GREETING_RESPONSE = """Hello! I'm **BI Wikolabs**, your enterprise analytics assistant.
+_GREETING_FALLBACK = """Hello! I'm your **BI Intelligence Agent**.
 
-I can answer business questions by querying your MongoDB database in real time. Here's what I can analyze:
-
-| Domain | Examples |
-|---|---|
-| Sales & Revenue | Monthly trends, regional performance, order values |
-| Products | Top sellers, margins, inventory, categories |
-| Customers | Segments (Enterprise/SMB/Individual), lifetime value |
-| HR & Employees | Headcount, payroll, performance by department |
-| Finance | Cash flow, expense breakdown, transaction status |
-| Contacts | Named contacts at customer companies |
-| Suppliers | Vendor info, lead times, product sourcing |
+I can answer business questions by querying your MongoDB database in real time.
 
 **Try asking:**
-- *"What are the top 5 products by revenue?"*
-- *"Show monthly cash flow for the last year"*
-- *"Which customer segment is most profitable?"*
-- *"What orders did Marcus Johnson manage?"*
+- *"What are the top entries by value?"*
+- *"Show trends over the last 12 months"*
+- *"Compare totals by category"*
+- *"List all records matching a condition"*
 
 What would you like to explore?"""
+
+
+async def _greeting() -> str:
+    """Build a greeting that lists the client's actual collections."""
+    try:
+        from schema_registry import get_all_summaries
+        summaries = await get_all_summaries()
+        if summaries:
+            cols = sorted(summaries.keys())
+            table = "\n".join(
+                f"| `{c}` | {summaries[c][:65]}{'…' if len(summaries[c]) > 65 else ''} |"
+                for c in cols
+            )
+            return f"""Hello! I'm your **BI Intelligence Agent**.
+
+I can answer questions about your data in plain English.
+
+**Your collections:**
+
+| Collection | About |
+|---|---|
+{table}
+
+**Try asking:**
+- *"What are the top items by value?"*
+- *"Show me a monthly trend"*
+- *"Compare totals across categories"*
+
+What would you like to explore?"""
+    except Exception:
+        pass
+    return _GREETING_FALLBACK
 
 
 async def _decompose(question: str) -> list[str]:
@@ -151,7 +173,7 @@ async def run(
         analysis = await analyze(sub_questions[0])
 
         if analysis.get("query_type") == "smalltalk":
-            return GREETING_RESPONSE, None, None, {}, []
+            return await _greeting(), None, None, {}, []
 
         entities   = analysis.get("entities", [])
         intent     = analysis.get("intent", question)
