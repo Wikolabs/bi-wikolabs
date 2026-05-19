@@ -28,7 +28,19 @@ import pytest
 def _make_chainlit_stub():
     """Build minimal chainlit modules that satisfy data_layer.py imports."""
 
-    # chainlit.types: PaginatedResponse is a simple class that stores data + pageInfo
+    from dataclasses import dataclass
+    from typing import Optional as _Opt
+
+    @dataclass
+    class PageInfo:
+        hasNextPage: bool
+        startCursor: _Opt[str]
+        endCursor: _Opt[str]
+
+        def to_dict(self):
+            return {"hasNextPage": self.hasNextPage, "startCursor": self.startCursor, "endCursor": self.endCursor}
+
+    # chainlit.types: PaginatedResponse stores data + PageInfo
     class PaginatedResponse:
         def __init__(self, data, pageInfo):
             self.data     = data
@@ -49,6 +61,7 @@ def _make_chainlit_stub():
 
     types_mod = types.ModuleType("chainlit.types")
     types_mod.PaginatedResponse = PaginatedResponse
+    types_mod.PageInfo          = PageInfo
     types_mod.ThreadDict        = ThreadDict
     types_mod.ThreadFilter      = ThreadFilter
     types_mod.Pagination        = Pagination
@@ -79,10 +92,10 @@ def _make_chainlit_stub():
     # top-level chainlit module
     cl_mod = types.ModuleType("chainlit")
 
-    return cl_mod, data_mod, types_mod, user_mod, PaginatedResponse
+    return cl_mod, data_mod, types_mod, user_mod, PaginatedResponse, PageInfo
 
 
-_cl, _cl_data, _cl_types, _cl_user, PaginatedResponse = _make_chainlit_stub()
+_cl, _cl_data, _cl_types, _cl_user, PaginatedResponse, PageInfo = _make_chainlit_stub()
 
 # Inject before data_layer import
 sys.modules.setdefault("chainlit",       _cl)
@@ -219,7 +232,7 @@ async def test_db_pool_failure_returns_empty_not_500(layer):
 
     assert isinstance(result, PaginatedResponse)
     assert result.data == []
-    assert result.pageInfo["hasNextPage"] is False
+    assert result.pageInfo.hasNextPage is False
 
 
 @pytest.mark.asyncio
@@ -252,7 +265,7 @@ async def test_page_size_respected_and_has_next_page(layer):
     with patch_pool(layer, pool):
         result = await layer.list_threads(_pagination_dict(first=5), _filter_dict())
     assert len(result.data) == 5
-    assert result.pageInfo["hasNextPage"] is True
+    assert result.pageInfo.hasNextPage is True
 
 
 @pytest.mark.asyncio
@@ -262,7 +275,7 @@ async def test_no_next_page_when_fewer_results(layer):
     with patch_pool(layer, pool):
         result = await layer.list_threads(_pagination_dict(first=10), _filter_dict())
     assert len(result.data) == 3
-    assert result.pageInfo["hasNextPage"] is False
+    assert result.pageInfo.hasNextPage is False
 
 
 @pytest.mark.asyncio
@@ -271,8 +284,8 @@ async def test_empty_db_returns_empty_cursors(layer):
     with patch_pool(layer, pool):
         result = await layer.list_threads(_pagination_dict(), _filter_dict())
     assert result.data == []
-    assert result.pageInfo["startCursor"] is None
-    assert result.pageInfo["endCursor"]   is None
+    assert result.pageInfo.startCursor is None
+    assert result.pageInfo.endCursor   is None
 
 
 # ---------------------------------------------------------------------------

@@ -18,7 +18,7 @@ from typing import Dict, List, Optional
 log = logging.getLogger(__name__)
 
 from chainlit.data import BaseDataLayer
-from chainlit.types import Feedback, Pagination, PaginatedResponse, ThreadDict, ThreadFilter
+from chainlit.types import Feedback, PageInfo, Pagination, PaginatedResponse, ThreadDict, ThreadFilter
 from chainlit.user import PersistedUser, User
 
 
@@ -186,7 +186,7 @@ class PostgresDataLayer(BaseDataLayer):
             # Return empty response rather than propagating — avoids 500 on the sidebar
             return PaginatedResponse(
                 data=[],
-                pageInfo={"hasNextPage": False, "startCursor": None, "endCursor": None},
+                pageInfo=PageInfo(hasNextPage=False, startCursor=None, endCursor=None),
             )
 
     async def _list_threads_impl(
@@ -264,11 +264,11 @@ class PostgresDataLayer(BaseDataLayer):
 
         return PaginatedResponse(
             data=threads,
-            pageInfo={
-                "hasNextPage": has_next,
-                "startCursor": rows[0]["id"]  if rows else None,
-                "endCursor":   rows[-1]["id"] if rows else None,
-            },
+            pageInfo=PageInfo(
+                hasNextPage=has_next,
+                startCursor=rows[0]["id"]  if rows else None,
+                endCursor=rows[-1]["id"]   if rows else None,
+            ),
         )
 
     async def get_thread(self, thread_id: str) -> Optional[ThreadDict]:

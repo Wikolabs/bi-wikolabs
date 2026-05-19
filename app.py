@@ -8,14 +8,16 @@ import time
 from typing import Optional
 
 import chainlit as cl
-import chainlit.data as cl_data
 
 from data_layer import PostgresDataLayer
 from pipeline.orchestrator import run as orchestrator_run
 
 logger = logging.getLogger(__name__)
 
-cl_data._data_layer = PostgresDataLayer()
+
+@cl.data_layer
+def get_data_layer():
+    return PostgresDataLayer()
 
 EXPORT_DIR = "/data/exports"
 BASE_URL   = os.getenv("BASE_URL", "https://bi.wikolabs.com/exports")
