@@ -183,7 +183,11 @@ class PostgresDataLayer(BaseDataLayer):
             return await self._list_threads_impl(pagination, filters)
         except Exception:
             log.error("list_threads failed:\n%s", tb.format_exc())
-            raise
+            # Return empty response rather than propagating — avoids 500 on the sidebar
+            return PaginatedResponse(
+                data=[],
+                pageInfo={"hasNextPage": False, "startCursor": None, "endCursor": None},
+            )
 
     async def _list_threads_impl(
         self, pagination: Pagination, filters: ThreadFilter
