@@ -48,6 +48,30 @@ def _serialize(value) -> str:
     return str(value) if value is not None else ""
 
 
+def _step_dict(s) -> Dict:
+    """Build a complete StepDict from a DB row, including all optional fields."""
+    return {
+        "id":            s["id"],
+        "threadId":      s["thread_id"],
+        "parentId":      s["parent_id"],
+        "type":          s["type"] or "undefined",
+        "name":          s["name"] or "",
+        "input":         s["input_"] or "",
+        "output":        s["output"] or "",
+        "metadata":      dict(s["metadata"]) if s["metadata"] else {},
+        "createdAt":     s["created_at"].isoformat(),
+        "isError":       bool(s["is_error"]),
+        "streaming":     False,
+        "tags":          [],
+        "indent":        0,
+        "waitForAnswer": None,
+        "start":         None,
+        "end":           None,
+        "language":      None,
+        "showInput":     False,
+    }
+
+
 class PostgresDataLayer(BaseDataLayer):
     """Chainlit data persistence backed by our internal PostgreSQL."""
 
@@ -152,35 +176,44 @@ class PostgresDataLayer(BaseDataLayer):
         self, pagination: Pagination, filters: ThreadFilter
     ) -> PaginatedResponse[ThreadDict]:
         pool = await self._pool()
+        cursor = getattr(pagination, "cursor", None)
+
         async with pool.acquire() as conn:
+            # Resolve cursor to a timestamp for keyset pagination
+            cursor_ts = None
+            if cursor:
+                cursor_ts = await conn.fetchval(
+                    "SELECT updated_at FROM chat_threads WHERE id = $1", cursor
+                )
+
+            base_where = "t.deleted = FALSE"
+            params: list = []
+            idx = 1
+
             if filters.userId:
-                rows = await conn.fetch(
-                    """
-                    SELECT t.*,
-                           (SELECT output FROM chat_steps
-                            WHERE thread_id = t.id AND type = 'assistant_message'
-                            ORDER BY created_at DESC LIMIT 1) AS last_output
-                    FROM chat_threads t
-                    WHERE t.deleted = FALSE AND t.user_id = $1
-                    ORDER BY t.updated_at DESC
-                    LIMIT $2
-                    """,
-                    filters.userId, pagination.first + 1,
-                )
-            else:
-                rows = await conn.fetch(
-                    """
-                    SELECT t.*,
-                           (SELECT output FROM chat_steps
-                            WHERE thread_id = t.id AND type = 'assistant_message'
-                            ORDER BY created_at DESC LIMIT 1) AS last_output
-                    FROM chat_threads t
-                    WHERE t.deleted = FALSE
-                    ORDER BY t.updated_at DESC
-                    LIMIT $1
-                    """,
-                    pagination.first + 1,
-                )
+                base_where += f" AND t.user_id = ${idx}"
+                params.append(filters.userId)
+                idx += 1
+
+            if cursor_ts:
+                base_where += f" AND t.updated_at < ${idx}"
+                params.append(cursor_ts)
+                idx += 1
+
+            params.append(pagination.first + 1)
+            limit_idx = idx
+
+            rows = await conn.fetch(
+                f"""
+                SELECT t.*, u.identifier AS user_identifier
+                FROM chat_threads t
+                LEFT JOIN chat_users u ON u.id = t.user_id
+                WHERE {base_where}
+                ORDER BY t.updated_at DESC
+                LIMIT ${limit_idx}
+                """,
+                *params,
+            )
 
         has_next = len(rows) > pagination.first
         rows     = rows[: pagination.first]
@@ -191,9 +224,10 @@ class PostgresDataLayer(BaseDataLayer):
                 name=r["name"] or "New conversation",
                 createdAt=r["created_at"].isoformat(),
                 userId=r["user_id"],
-                userIdentifier=None,
+                userIdentifier=r["user_identifier"],
                 metadata=dict(r["metadata"]) if r["metadata"] else {},
                 steps=[],
+                elements=[],
                 tags=list(r["tags"]) if r["tags"] else [],
             )
             for r in rows
@@ -211,7 +245,12 @@ class PostgresDataLayer(BaseDataLayer):
         pool = await self._pool()
         async with pool.acquire() as conn:
             t = await conn.fetchrow(
-                "SELECT * FROM chat_threads WHERE id = $1 AND deleted = FALSE",
+                """
+                SELECT t.*, u.identifier AS user_identifier
+                FROM chat_threads t
+                LEFT JOIN chat_users u ON u.id = t.user_id
+                WHERE t.id = $1 AND t.deleted = FALSE
+                """,
                 thread_id,
             )
             if not t:
@@ -226,33 +265,25 @@ class PostgresDataLayer(BaseDataLayer):
             name=t["name"] or "New conversation",
             createdAt=t["created_at"].isoformat(),
             userId=t["user_id"],
-            userIdentifier=None,
+            userIdentifier=t["user_identifier"],
             metadata=dict(t["metadata"]) if t["metadata"] else {},
             tags=list(t["tags"]) if t["tags"] else [],
-            steps=[
-                {
-                    "id":        s["id"],
-                    "threadId":  thread_id,
-                    "parentId":  s["parent_id"],
-                    "type":      s["type"] or "undefined",
-                    "name":      s["name"] or "",
-                    "input":     s["input_"] or "",
-                    "output":    s["output"] or "",
-                    "metadata":  dict(s["metadata"]) if s["metadata"] else {},
-                    "createdAt": s["created_at"].isoformat(),
-                    "isError":   bool(s["is_error"]),
-                    "streaming": False,
-                    "tags":      [],
-                }
-                for s in steps
-            ],
+            elements=[],
+            steps=[_step_dict(s) for s in steps],
         )
 
     async def get_thread_author(self, thread_id: str) -> Optional[str]:
+        """Return the user identifier (e.g. 'demo') for auth checks — NOT the UUID."""
         pool = await self._pool()
         async with pool.acquire() as conn:
             return await conn.fetchval(
-                "SELECT user_id FROM chat_threads WHERE id = $1", thread_id
+                """
+                SELECT u.identifier
+                FROM chat_threads t
+                LEFT JOIN chat_users u ON u.id = t.user_id
+                WHERE t.id = $1
+                """,
+                thread_id,
             )
 
     # ── Steps ─────────────────────────────────────────────────────────────────
@@ -278,7 +309,7 @@ class PostgresDataLayer(BaseDataLayer):
                 step_dict.get("name"),
                 _serialize(step_dict.get("input", "")),
                 _serialize(step_dict.get("output", "")),
-                json.dumps(step_dict.get("metadata", {})),   # string → ::jsonb
+                json.dumps(step_dict.get("metadata", {})),
                 bool(step_dict.get("isError", False)),
                 _parse_dt(step_dict.get("createdAt", _now())),
             )
@@ -298,7 +329,7 @@ class PostgresDataLayer(BaseDataLayer):
                 "SELECT * FROM chat_steps WHERE thread_id = $1 AND favorite = TRUE",
                 thread_id,
             )
-        return [dict(r) for r in rows]
+        return [_step_dict(r) for r in rows]
 
     async def set_step_favorite(self, step_id: str, is_favorite: bool) -> None:
         pool = await self._pool()

@@ -1,6 +1,6 @@
 # BI Wikolabs — Enterprise AI Business Intelligence Agent
 
-An enterprise-grade **natural language BI chatbot** powered by Groq LLM and MongoDB. Ask business questions in plain English and get instant insights, charts, and exportable reports — no SQL or query language needed.
+An enterprise-grade **natural language BI chatbot** powered by Groq LLM, MongoDB, and PostgreSQL+pgvector. Ask business questions in plain English and get instant insights, interactive charts, and exportable reports — no SQL or query language needed.
 
 **Live demo:** [bi.wikolabs.com](https://bi.wikolabs.com)
 
@@ -13,12 +13,15 @@ An enterprise-grade **natural language BI chatbot** powered by Groq LLM and Mong
 - [6-Step Query Pipeline](#6-step-query-pipeline)
 - [Technology Stack](#technology-stack)
 - [Data Model](#data-model)
+- [Dynamic Schema Extraction](#dynamic-schema-extraction)
+- [Chat History Persistence](#chat-history-persistence)
 - [Project Structure](#project-structure)
 - [Getting Started (Local Development)](#getting-started-local-development)
 - [Deployment with Docker](#deployment-with-docker)
 - [CI/CD — GitHub Actions](#cicd--github-actions)
 - [GitHub Secrets Reference](#github-secrets-reference)
 - [Environment Variables](#environment-variables)
+- [Test Suite](#test-suite)
 - [Example Queries](#example-queries)
 - [Export Features](#export-features)
 - [Contributing & Developer Onboarding](#contributing--developer-onboarding)
@@ -35,8 +38,11 @@ BI Wikolabs translates natural language questions into MongoDB aggregation pipel
 - Root-cause drill-down for WHY questions
 - Entity name resolution to ObjectIds (resolves "Acme Corp" → `ObjectId("...")`)
 - Self-correcting queries (retry with error feedback, up to 3 attempts)
+- Dynamic schema extraction — LLM always sees current field names from MongoDB
+- Semantic collection search via pgvector embeddings
+- Golden records — save verified question/query pairs for future few-shot examples
 - Export results as Excel (.xlsx) or PDF
-- Chat history persisted locally via SQLite
+- Full chat history persisted in PostgreSQL
 
 ---
 
@@ -49,8 +55,8 @@ flowchart TD
     S0["Step 0 — Compound Question Decomposition"]
     S1["Step 1 — Query Analysis\nclassify + extract entities"]
     S2["Step 2 — Entity Resolution\nname → ObjectId"]
-    S3["Step 3 — Collection Selection"]
-    S4["Step 4 — MQL Generation\nwith schemas + examples"]
+    S3["Step 3 — Collection Selection\npgvector similarity + LLM"]
+    S4["Step 4 — MQL Generation\ndynamic schema + golden records"]
     S5["Step 5 — Execute + Auto-Retry\nmax 3 attempts"]
     S6["Step 6 — Narrative + Chart + DataFrame"]
     OUT1["Chainlit message\nnarrative + chart"]
@@ -69,14 +75,23 @@ flowchart TD
 ```mermaid
 flowchart TD
     Internet[":80 / :443\n(public)"]
-    Caddy["Caddy 2\nreverse proxy + static file server\nserves /exports/* from app_data volume"]
+    Caddy["Caddy 2\nreverse proxy + TLS\nserves /exports/* from app_data volume"]
     App["Chainlit app:8000\nPython app\nwrites exports to /data/exports/"]
-    MongoDB["MongoDB 7\nmongo:27017\nbi_wikolabs — 7 collections"]
+    MongoDB["MongoDB 7\nmongo:27017\nclient data — 7 collections"]
+    PG["PostgreSQL 16 + pgvector\npostgres:5432\nschema registry + chat history\n+ golden records"]
 
     Internet --> Caddy
     Caddy -->|"proxy to :8000"| App
-    App -->|pymongo| MongoDB
+    App -->|pymongo read-only| MongoDB
+    App -->|asyncpg read/write| PG
 ```
+
+### Two-Database Architecture
+
+| Database | Role | Access |
+|---|---|---|
+| **MongoDB 7** | Client's business data — orders, customers, products, employees, transactions, etc. | Read-only via pymongo |
+| **PostgreSQL 16 + pgvector** | Internal app data — schema registry, chat history (threads/steps/users), golden records, vector embeddings | Read/write via asyncpg |
 
 ---
 
@@ -92,7 +107,7 @@ Detects compound questions using regex patterns ("and also", "as well as", "both
 
 **Model:** `llama-3.1-8b-instant` (fast, low-latency)
 
-Classifies the question and extracts named entities in a single LLM call.
+Classifies the question and extracts named entities in a single LLM call using `instructor` + Pydantic for structured output.
 
 | Output field | Description |
 |---|---|
@@ -109,16 +124,27 @@ Converts entity names to MongoDB ObjectIds via case-insensitive regex search acr
 
 ### Step 3 — Collection Selection (`pipeline/collection_selector.py`) ← parallel
 
-Selects the 1–3 most relevant MongoDB collections for the query. Uses an LLM call with dynamic schema summaries (falls back to keyword matching if LLM fails).
+Selects the 1–3 most relevant MongoDB collections for the query using a 3-tier fallback:
 
-> Steps 2 and 3 run **concurrently** — saving ~500ms per query.
+1. **pgvector similarity search** — cosine similarity on schema embeddings stored in PostgreSQL
+2. **LLM selection** — `llama-3.1-8b-instant` with collection summaries if similarity score is low
+3. **Keyword fallback** — deterministic keyword matching if both LLM tiers fail
+
+> Steps 2 and 3 run **concurrently** via `asyncio.gather()` — saving ~500ms per query.
 
 ### Step 4 — MQL Generation (`pipeline/mql_generator.py`)
 
 **Model:** `llama-3.3-70b-versatile` (highest reasoning quality)
 
-Generates a valid MongoDB query JSON given the question, entity map, collection schemas, and few-shot examples. Outputs:
+Generates a valid MongoDB query JSON given the question, entity map, collection schemas, and few-shot examples. Uses `instructor` + Pydantic (`MongoQuery`) for guaranteed valid output with auto-retries.
 
+The system prompt includes:
+- **Dynamic schema** (from PostgreSQL `schema_registry`, extracted from live MongoDB docs)
+- **Entity context** with resolved ObjectIds and correct filter syntax
+- **Golden record examples** — similar past verified question/query pairs retrieved by pgvector
+- **Static few-shot examples** per query type
+
+Outputs a `MongoQuery` Pydantic model serialized to:
 ```json
 {
   "collection": "orders",
@@ -140,12 +166,14 @@ Runs the generated query against MongoDB. On failure, feeds the error message ba
 1. Builds a Pandas DataFrame from results
 2. Generates a business narrative (LLM)
 3. Selects the appropriate Plotly chart type:
-   - **Pie**: 2–10 category comparisons
-   - **Horizontal bar**: Rankings
-   - **Vertical bar / Grouped bar**: Lists and multi-metric comparisons
+   - **None** — for single-value metrics and entity lookups
+   - **Horizontal bar** — rankings (sorted values)
+   - **Pie** — 2–10 category comparisons with 1 metric
+   - **Grouped bar** — multi-metric comparisons
+   - **Vertical bar** — list/trend data
 4. If `is_why_question = true`, triggers a second MQL query for root-cause drill-down
 
-**Total LLM calls per query:** 3 minimum (analyze + generate + respond), 4 if collection selection uses LLM.
+**Total LLM calls per query:** 3 minimum (analyze + generate + respond), 4 if collection selection uses LLM, +1 for compound question decomposition, +1 for WHY drill-down.
 
 ---
 
@@ -156,23 +184,28 @@ Runs the generated query against MongoDB. On failure, feeds the error message ba
 | Chat UI | [Chainlit](https://docs.chainlit.io/) ≥ 1.0 | Python-native chat framework, streaming, file uploads |
 | LLM Provider | [Groq](https://groq.com/) | Ultra-fast inference for llama-3.x models |
 | LLM Models | `llama-3.3-70b-versatile`, `llama-3.1-8b-instant` | High-quality reasoning + fast classification |
-| Database | MongoDB 7 | Document store for all business data |
-| ODM / Driver | pymongo ≥ 4.8 | MongoDB Python driver |
+| Structured Output | [instructor](https://python.useinstructor.com/) ≥ 1.3 | Pydantic-validated LLM responses with auto-retry |
+| Client Database | MongoDB 7 | Document store for all business data (read-only) |
+| MongoDB Driver | pymongo ≥ 4.8 | Sync MongoDB Python driver |
+| Internal Database | PostgreSQL 16 + pgvector | Schema registry, chat history, golden records, embeddings |
+| PostgreSQL Driver | asyncpg ≥ 0.29 | Async PostgreSQL driver |
+| Vector Search | pgvector ≥ 0.3 + HNSW index | Cosine similarity for collection selection and golden records |
+| Embeddings | [FastEmbed](https://github.com/qdrant/fastembed) ≥ 0.3.6 | ONNX-based 384-dim embeddings (no PyTorch needed) |
 | Data Processing | Pandas ≥ 2.0 | DataFrame manipulation and analysis |
 | Charts | Plotly ≥ 5.0 | Interactive charts in Chainlit |
-| Chat Persistence | SQLite (via `data_layer.py`) | Local thread + message history |
 | Excel Export | openpyxl ≥ 3.1 | `.xlsx` file generation |
 | PDF Export | fpdf2 ≥ 2.7 | Landscape PDF reports |
 | Demo Data | Faker ≥ 24.0 | Realistic synthetic data generation |
 | Container | Docker + Docker Compose | Service orchestration |
-| Reverse Proxy | Caddy 2 | TLS termination + static file serving |
+| Reverse Proxy | Caddy 2 | TLS termination (Let's Encrypt) + static file serving |
 | CI/CD | GitHub Actions | Auto-deploy on push to `main` |
+| Testing | pytest ≥ 8.0, pytest-asyncio ≥ 0.23 | 198 tests across unit + integration suites |
 
 ---
 
 ## Data Model
 
-The database is `bi_wikolabs` in MongoDB, containing 7 collections with ObjectId-based foreign keys.
+MongoDB database `bi_wikolabs` contains 7 collections with ObjectId-based foreign keys.
 
 ### Collections
 
@@ -290,43 +323,113 @@ erDiagram
 
 ---
 
+## Dynamic Schema Extraction
+
+A core design principle: the LLM prompt always contains **live field names from real MongoDB documents**, never hardcoded strings.
+
+### How it works
+
+```
+MongoDB docs
+    ↓  sample 500 docs per collection
+_extract_fields()          [schema_registry.py]
+    ↓  {field_path → {types, enum_values}}
+PostgreSQL schema_collections + schema_fields tables
+    ↓  HNSW vector index (384-dim FastEmbed)
+PostgreSQL schema_summaries + embedding
+    ↓
+get_full_schema(collection) → injected into MQL prompt
+find_similar_collections(question) → used by collection selector
+```
+
+### Schema tables (PostgreSQL)
+
+| Table | Purpose |
+|---|---|
+| `schema_collections` | One row per MongoDB collection, with `last_scanned` and `doc_count` |
+| `schema_fields` | One row per field path, with type frequencies and enum values |
+| `schema_summaries` | One-line prompt summary + 384-dim vector embedding per collection |
+
+### Nightly refresh
+
+`scheduler.py` runs a nightly APScheduler job that calls `schema_registry.refresh_all()`, re-sampling each collection and updating the schema tables. A first-boot refresh runs automatically on startup if the registry is empty.
+
+---
+
+## Chat History Persistence
+
+Chainlit's built-in `SQLiteDataLayer` has been replaced with a custom `PostgresDataLayer` (`data_layer.py`) backed by our internal PostgreSQL.
+
+### Tables (PostgreSQL)
+
+| Table | Purpose |
+|---|---|
+| `chat_users` | One row per authenticated user (`identifier` + `metadata`) |
+| `chat_threads` | One row per conversation thread (links to `chat_users`) |
+| `chat_steps` | All messages and tool steps within each thread |
+| `chat_elements` | File/image elements (reserved for future use) |
+| `chat_feedbacks` | User thumbs-up/down feedback on steps |
+
+### Auth flow
+
+`app.py` registers a `@cl.header_auth_callback` that returns a `cl.User(identifier="demo")` for all connections (suitable for a single-tenant deployment). Chainlit then calls `get_user` / `create_user` on the data layer to get a persisted user with a stable UUID, which is used to associate threads.
+
+**Important:** `get_thread_author` returns the user's `identifier` string (not their UUID), because Chainlit compares it against the session's `user.identifier` to authorize thread access.
+
+---
+
 ## Project Structure
 
 ```
 bi-wikolabs/
 ├── app.py                      # Chainlit entry point — chat handlers, export actions
-├── agent.py                    # Legacy simplified agent (not used in production)
-├── db.py                       # MongoDB connection + SchemaExtractor singleton
-├── data_layer.py               # SQLite-backed Chainlit data persistence (threads, steps)
+├── db.py                       # DB connections: MongoDB (pymongo) + PostgreSQL (asyncpg pool)
+├── data_layer.py               # PostgreSQL-backed Chainlit data layer (threads, steps, users)
+├── schema_registry.py          # Dynamic schema extraction: MongoDB → PostgreSQL + embeddings
+├── embeddings.py               # FastEmbed 384-dim sentence embeddings (ONNX, no PyTorch)
+├── golden_records.py           # Save/search verified question→MQL pairs via pgvector
+├── migrations.py               # SQL migration runner (applied on startup, idempotent)
+├── migrations/
+│   └── 001_initial.sql         # Full PostgreSQL schema (schema registry + chat + golden records)
+├── scheduler.py                # APScheduler nightly schema refresh job
 ├── exporter.py                 # Excel (.xlsx) and PDF export utilities
-├── prompts.py                  # LLM system prompts
-├── schema_extractor.py         # Dynamic MongoDB schema sampler (20 docs/collection)
-├── schemas.py                  # Hardcoded fallback schemas (used if DB unavailable)
-├── pipelines.py                # 7 pre-built analytics aggregation pipelines
-├── seed.py                     # MongoDB demo data seeder (deterministic, seed=42)
+├── seed.py                     # MongoDB demo data seeder (Faker seed=42, deterministic)
+├── schemas.py                  # Static fallback schemas (used only if PostgreSQL is down)
+├── agent.py                    # Legacy simplified agent (not used in production)
+├── pipelines.py                # Pre-built analytics aggregation pipelines (reference)
 │
 ├── pipeline/                   # 6-step query pipeline
 │   ├── __init__.py
-│   ├── orchestrator.py         # Main coordinator — runs and merges all steps
-│   ├── analyzer.py             # Step 1: classify + extract entities
-│   ├── entity_resolver.py      # Step 2: name → ObjectId resolution
-│   ├── collection_selector.py  # Step 3: pick relevant MongoDB collections
-│   ├── mql_generator.py        # Step 4: generate MongoDB query JSON
-│   ├── executor.py             # Step 5: execute + auto-retry on error
-│   └── responder.py            # Step 6: narrative + Plotly chart + DataFrame
+│   ├── orchestrator.py         # Coordinator — compound decomposition + merge results
+│   ├── models.py               # Pydantic models: MongoQuery, AnalysisResult
+│   ├── analyzer.py             # Step 1: query classification + entity extraction (instructor)
+│   ├── entity_resolver.py      # Step 2: entity name → MongoDB ObjectId resolution
+│   ├── collection_selector.py  # Step 3: pgvector → LLM → keyword fallback chain
+│   ├── mql_generator.py        # Step 4: MQL generation (dynamic schema + golden records)
+│   ├── executor.py             # Step 5: MongoDB execution + auto-retry with error feedback
+│   └── responder.py            # Step 6: DataFrame + Plotly chart + narrative (instructor)
+│
+├── tests/
+│   ├── conftest.py             # Shared fixtures; sets GROQ_API_KEY before any imports
+│   ├── test_schema_extraction.py     # schema_registry._extract_fields, _build_summary
+│   ├── test_executor.py              # MongoDB query execution and retry logic
+│   ├── test_responder.py             # DataFrame building, chart type routing, _should_use_pie
+│   ├── test_pipeline_analyzer.py     # Query analysis with mocked Groq
+│   ├── test_pipeline_collection_selector.py  # 3-tier collection selection fallback
+│   └── test_integration.py           # 10 behavioral end-to-end scenarios
 │
 ├── .chainlit/
-│   └── config.toml             # Chainlit UI configuration (theme, features)
+│   └── config.toml             # Chainlit UI configuration (dark theme, sidebar, features)
 ├── .github/
 │   └── workflows/
-│       └── deploy.yml          # GitHub Actions CI/CD — SSH deploy to VPS
+│       └── deploy.yml          # GitHub Actions CI/CD — SSH deploy to VPS on push to main
 │
-├── docker-compose.yml          # Stack: mongo + app + caddy
-├── Dockerfile                  # Python 3.12-slim image, runs chainlit
-├── Caddyfile                   # Caddy config: reverse proxy + /exports/* static files
-├── requirements.txt            # Python dependencies
-├── .env.example                # Environment variable template
-└── mql-pipeline-architecture.md  # Detailed technical architecture documentation
+├── docker-compose.yml          # Services: mongo + postgres + app + caddy
+├── Dockerfile                  # Python 3.12-slim image
+├── Caddyfile                   # Caddy: TLS + reverse proxy + /exports/* static serving
+├── requirements.txt            # Production Python dependencies
+├── requirements-dev.txt        # Dev dependencies (requirements.txt + pytest)
+└── .env.example                # Environment variable template
 ```
 
 ---
@@ -337,6 +440,7 @@ bi-wikolabs/
 
 - Python 3.12+
 - MongoDB running locally (or Docker)
+- PostgreSQL running locally (or Docker) — required for schema registry and chat history
 - A [Groq API key](https://console.groq.com/) (free tier available)
 
 ### 1. Clone the repository
@@ -364,6 +468,11 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+For development (includes pytest):
+```bash
+pip install -r requirements-dev.txt
+```
+
 ### 4. Configure environment variables
 
 ```bash
@@ -374,18 +483,24 @@ Edit `.env`:
 
 ```env
 GROQ_API_KEY=your_groq_api_key_here
-MONGODB_URI=mongodb://localhost:27017
+MONGODB_URI=mongodb://localhost:27017/bi_wikolabs
+POSTGRES_URI=postgresql://bi:yourpassword@localhost:5432/bi_wikolabs
+CHAINLIT_AUTH_SECRET=any-random-string-for-local-dev
 ```
 
-### 5. Start MongoDB
-
-If you have Docker:
+### 5. Start databases
 
 ```bash
+# MongoDB
 docker run -d -p 27017:27017 --name mongo mongo:7
-```
 
-Or start your local MongoDB instance.
+# PostgreSQL with pgvector
+docker run -d -p 5432:5432 --name pg \
+  -e POSTGRES_DB=bi_wikolabs \
+  -e POSTGRES_USER=bi \
+  -e POSTGRES_PASSWORD=yourpassword \
+  pgvector/pgvector:pg16
+```
 
 ### 6. Seed demo data
 
@@ -401,7 +516,10 @@ This creates the full dataset: 8 suppliers, 26 products, 48 employees, 80 custom
 chainlit run app.py
 ```
 
-Open [http://localhost:8000](http://localhost:8000) in your browser.
+Open [http://localhost:8000](http://localhost:8000) in your browser. On first start, the app automatically:
+1. Runs SQL migrations (creates all PostgreSQL tables)
+2. Extracts MongoDB schemas and stores them in PostgreSQL
+3. Generates FastEmbed embeddings for collection similarity search
 
 ---
 
@@ -412,7 +530,7 @@ Open [http://localhost:8000](http://localhost:8000) in your browser.
 ```bash
 # 1. Set up environment variables
 cp .env.example .env
-# Edit .env with your GROQ_API_KEY and CHAINLIT_AUTH_SECRET
+# Edit .env with your secrets
 
 # 2. Build and start all services
 docker compose up -d --build
@@ -422,17 +540,15 @@ docker compose exec app python seed.py
 ```
 
 Services started:
-- **mongo** — MongoDB 7 on internal network (no external port exposed)
-- **app** — Chainlit app on port `8000`
-- **caddy** — Reverse proxy on ports `80` / `443` (requires DNS pointing to the server)
 
-### Ports & volumes
+| Service | Port | Internal host | Volume |
+|---|---|---|---|
+| `mongo` | internal only | `mongo:27017` | `mongo_data:/data/db` |
+| `postgres` | internal only | `postgres:5432` | `pg_data:/var/lib/postgresql/data` |
+| `app` | 8000 (proxied by Caddy) | `app:8000` | `app_data:/data`, `model_cache:/root/.cache/fastembed` |
+| `caddy` | 80, 443 | — | `caddy_data`, `caddy_config`, `app_data:ro` |
 
-| Service | Port | Volume |
-|---|---|---|
-| app | 8000 (internal, proxied by Caddy) | `app_data:/data` (SQLite DB + exports) |
-| caddy | 80, 443 | `caddy_data`, `caddy_config`, `app_data` (read-only for serving exports) |
-| mongo | internal only | `mongo_data:/data/db` |
+**Startup order:** Both `mongo` and `postgres` must pass their Docker healthchecks before the `app` starts (`condition: service_healthy`).
 
 ### Caddyfile (TLS + routing)
 
@@ -483,20 +599,21 @@ The workflow file is at `.github/workflows/deploy.yml`.
 flowchart TD
     PUSH["Push to main branch"]
     GHA["GitHub Actions\nubuntu-latest"]
+    VAL["Validate all 6 required secrets\nfail fast if any missing"]
     SSH["SSH into VPS\nappleboy/ssh-action@v1.2.0"]
     CHK{"/opt/bi-wikolabs\nexists?"}
     CLONE["git clone repo"]
     PULL["git pull origin main"]
-    ENV["Write .env from GitHub Secrets\nGROQ_API_KEY · MONGODB_URI · CHAINLIT_AUTH_SECRET"]
-    BUILD["docker compose up -d --build"]
-    SLEEP["sleep 8s\nwait for services"]
-    SEED["docker compose exec app python seed.py\nbest-effort"]
+    ENV["Write .env from GitHub Secrets\nGROQ_API_KEY · MONGODB_URI · CHAINLIT_AUTH_SECRET\nPOSTGRES_PASSWORD · POSTGRES_URI"]
+    BUILD["docker compose up -d --build --remove-orphans"]
+    WAIT["Wait up to 60s for app container\n12 × 5s retries"]
+    SEED["docker compose exec app python seed.py\nbest-effort (|| true)"]
     DONE["Deployment complete"]
 
-    PUSH --> GHA --> SSH --> CHK
+    PUSH --> GHA --> VAL --> SSH --> CHK
     CHK -->|No| CLONE --> ENV
     CHK -->|Yes| PULL --> ENV
-    ENV --> BUILD --> SLEEP --> SEED --> DONE
+    ENV --> BUILD --> WAIT --> SEED --> DONE
 ```
 
 **Deploy destination:** `/opt/bi-wikolabs` on the VPS, running as `root`.
@@ -509,24 +626,17 @@ Configure these in **GitHub → Settings → Secrets and variables → Actions �
 
 | Secret name | Required | Description |
 |---|---|---|
-| `VPS_HOST` | Yes | IP address or hostname of your VPS (e.g., `123.45.67.89`) |
-| `SSH_PRIVATE_KEY` | Yes | Private SSH key (ED25519 or RSA) with access to the VPS root account |
+| `VPS_HOST` | Yes | IP address or hostname of your VPS |
+| `SSH_PRIVATE_KEY` | Yes | Private SSH key with access to the VPS root account |
 | `GROQ_API_KEY` | Yes | Your Groq API key from [console.groq.com](https://console.groq.com/) |
-| `CHAINLIT_AUTH_SECRET` | Yes | Random secret string for Chainlit session tokens (generate with `openssl rand -hex 32`) |
+| `POSTGRES_PASSWORD` | Yes | Password for the PostgreSQL `bi` user (generate with `openssl rand -hex 32`) |
+| `MONGODB_URI` | Yes | MongoDB connection URI (e.g. `mongodb://mongo:27017/bi_wikolabs`) |
+| `CHAINLIT_AUTH_SECRET` | Yes | Random secret for Chainlit session tokens (generate with `openssl rand -hex 32`) |
 
-### Generating `CHAINLIT_AUTH_SECRET`
-
-```bash
-openssl rand -hex 32
-```
-
-### Setting up SSH access for GitHub Actions
-
-On your VPS, add the corresponding public key to `~/.ssh/authorized_keys`:
+### Generating secrets
 
 ```bash
-echo "your-public-key-here" >> ~/.ssh/authorized_keys
-chmod 600 ~/.ssh/authorized_keys
+openssl rand -hex 32   # Use for POSTGRES_PASSWORD and CHAINLIT_AUTH_SECRET
 ```
 
 ---
@@ -536,14 +646,57 @@ chmod 600 ~/.ssh/authorized_keys
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `GROQ_API_KEY` | Yes | — | Groq API authentication key |
-| `MONGODB_URI` | No | `mongodb://mongo:27017` | MongoDB connection URI |
+| `MONGODB_URI` | No | `mongodb://mongo:27017` | MongoDB connection URI (include `/dbname` for multi-db hosts) |
+| `MONGODB_DB` | No | `bi_wikolabs` | Database name (fallback when URI has no `/dbname`) |
+| `POSTGRES_URI` | Yes | — | PostgreSQL connection string (e.g. `postgresql://bi:pw@postgres:5432/bi_wikolabs`) |
+| `POSTGRES_PASSWORD` | Yes (Docker) | — | Used by docker-compose to set the PostgreSQL password |
 | `CHAINLIT_AUTH_SECRET` | Yes (prod) | — | Secret for signing Chainlit session tokens |
+| `BASE_URL` | No | `https://bi.wikolabs.com/exports` | Base URL prefix for export file download links |
+
+---
+
+## Test Suite
+
+The project has **198 tests** covering all pipeline stages plus 10 behavioral integration scenarios.
+
+### Running tests
+
+```bash
+# Install dev dependencies
+pip install -r requirements-dev.txt
+
+# Run all tests
+pytest
+
+# Run a specific test file
+pytest tests/test_integration.py -v
+
+# Run with output
+pytest -s
+```
+
+### Test files
+
+| File | Coverage | Count |
+|---|---|---|
+| `test_schema_extraction.py` | `schema_registry._extract_fields`, `_build_summary`, type inference | ~30 |
+| `test_executor.py` | MongoDB query execution, auto-retry, error injection | ~25 |
+| `test_responder.py` | DataFrame building, chart routing, `_should_use_pie` | ~40 |
+| `test_pipeline_analyzer.py` | All 6 query types, entity extraction, Pydantic validation | ~30 |
+| `test_pipeline_collection_selector.py` | 3-tier fallback, entity boost, smalltalk short-circuit | ~35 |
+| `test_integration.py` | 10 end-to-end behavioral scenarios + dynamic schema validation | ~38 |
+
+### Key design decisions in tests
+
+- `conftest.py` sets `GROQ_API_KEY` before any imports (pipeline modules instantiate `AsyncGroq` at module level)
+- All tests are fully isolated — no real network calls, no real database connections
+- Schema functions return dynamically computed values from seeded in-memory MongoDB documents
+- `AsyncMock` is used for all async functions; patch at the usage site, not the definition site
+- Integration test 10 verifies that custom field names (`sale_value`, `buyer_region`) appear in the LLM prompt's schema section while fallback names (`total_amount`) do not
 
 ---
 
 ## Example Queries
-
-The chatbot handles a wide range of business analytics questions:
 
 ### Metrics (single KPIs)
 - "What is our total revenue this year?"
@@ -600,43 +753,43 @@ Exported files are written to `/data/exports/` inside the container and served v
 Start with these files in order:
 
 1. **`app.py`** — The Chainlit entry point. Understand the message flow and how results are displayed.
-2. **`pipeline/orchestrator.py`** — The main pipeline coordinator. Read the `run()` function (line ~149).
+2. **`pipeline/orchestrator.py`** — The main pipeline coordinator. Read the `run()` function.
 3. **`pipeline/analyzer.py`** → **`entity_resolver.py`** → **`collection_selector.py`** → **`mql_generator.py`** → **`executor.py`** → **`responder.py`** — Each step in sequence.
-4. **`db.py`** + **`schema_extractor.py`** — How MongoDB connection and schema introspection work.
-5. **`seed.py`** — The full data model. Read this to understand every collection's shape.
-
-For deep architecture detail, read **`mql-pipeline-architecture.md`**.
+4. **`db.py`** — How both database connections (MongoDB + PostgreSQL) work.
+5. **`schema_registry.py`** — The dynamic schema extraction and pgvector similarity search.
+6. **`data_layer.py`** — How Chainlit's chat history is persisted in PostgreSQL.
+7. **`seed.py`** — The full data model. Read this to understand every collection's shape.
 
 ### Adding a new query type
 
 1. Add the type name to the `query_type` enum in `pipeline/analyzer.py`'s system prompt.
-2. Add few-shot examples for the new type in `pipeline/mql_generator.py`.
-3. Add chart logic in `pipeline/responder.py` if needed.
+2. Add a `MongoQuery` variant in `pipeline/models.py` if needed.
+3. Add static few-shot examples for the new type in `pipeline/mql_generator.py`.
+4. Add chart logic in `pipeline/responder.py` if needed.
+5. Add behavioral tests in `tests/test_integration.py`.
 
 ### Adding a new MongoDB collection
 
 1. Add seed data in `seed.py` (create the collection and insert documents).
 2. Add the collection name and summary to `pipeline/collection_selector.py`'s keyword fallback map.
-3. Add a fallback schema entry in `schemas.py`.
-4. Add entity search logic in `pipeline/entity_resolver.py` if the collection contains named entities.
-
-### Running tests / linting
-
-There is no test suite at this stage. Manual testing via the chat UI is the current approach. Seed data is deterministic (Faker seed 42) so queries return consistent results.
+3. Add entity search logic in `pipeline/entity_resolver.py` if the collection contains named entities.
+4. The schema registry picks it up automatically on next refresh (no code change needed).
 
 ### Key design decisions
 
 | Decision | Reason |
 |---|---|
 | Groq over OpenAI | 10–20× faster inference — critical for a chat interface |
-| MongoDB over SQL | Flexible document model suits evolving BI schemas |
-| Dynamic schema extraction | LLM gets current column names even after schema changes |
+| Two databases (MongoDB + PostgreSQL) | MongoDB = flexible client data; PostgreSQL = structured app metadata + vector search |
+| Dynamic schema extraction | LLM gets current field names even after client schema changes |
+| pgvector for collection selection | Semantic match scales to hundreds of collections without prompt bloat |
+| `instructor` + Pydantic for LLM output | Eliminates JSON parse errors with auto-retry; enforces output contracts |
 | Parallel Steps 2 & 3 | ~500ms saved per query with `asyncio.gather` |
 | Entity → ObjectId resolution | Prevents brittle name-matching; handles name duplicates |
 | Self-correcting MQL (retry) | Eliminates ~30% of failures without user intervention |
 | Chainlit (not FastAPI + custom UI) | Python-native, handles streaming + file uploads out of the box |
 | Caddy (not Nginx) | Automatic TLS via Let's Encrypt, zero config for static files |
-| SQLite for chat history | No extra service to manage; suitable for single-server deployment |
+| PostgreSQL for chat history | Same DB used for schema registry and golden records; avoids SQLite file lock issues in containers |
 
 ---
 
