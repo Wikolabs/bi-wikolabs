@@ -9,6 +9,22 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
+      - name: Validate required secrets
+        run: |
+          missing=""
+          [ -z "${{ secrets.VPS_HOST }}"           ] && missing="$missing VPS_HOST"
+          [ -z "${{ secrets.SSH_PRIVATE_KEY }}"    ] && missing="$missing SSH_PRIVATE_KEY"
+          [ -z "${{ secrets.GROQ_API_KEY }}"       ] && missing="$missing GROQ_API_KEY"
+          [ -z "${{ secrets.POSTGRES_PASSWORD }}"  ] && missing="$missing POSTGRES_PASSWORD"
+          [ -z "${{ secrets.MONGODB_URI }}"        ] && missing="$missing MONGODB_URI"
+          [ -z "${{ secrets.CHAINLIT_AUTH_SECRET }}"] && missing="$missing CHAINLIT_AUTH_SECRET"
+          if [ -n "$missing" ]; then
+            echo "❌ Missing required GitHub secrets:$missing"
+            echo "   Go to: Settings → Secrets and variables → Actions → New repository secret"
+            exit 1
+          fi
+          echo "✅ All required secrets present."
+
       - name: Deploy to VPS
         uses: appleboy/ssh-action@v1.2.0
         with:
@@ -19,6 +35,7 @@ jobs:
             set -e
             APP_DIR=/opt/bi-wikolabs
 
+            # Clone on first deploy
             if [ ! -d "$APP_DIR/.git" ]; then
               git clone https://github.com/Wikolabs/bi-wikolabs.git $APP_DIR
             fi
@@ -26,14 +43,33 @@ jobs:
             cd $APP_DIR
             git pull origin main
 
-            echo "MONGODB_URI=${{ secrets.MONGODB_URI }}" > .env
-            echo "GROQ_API_KEY=${{ secrets.GROQ_API_KEY }}" >> .env
-            echo "POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}" >> .env
-            echo "CHAINLIT_AUTH_SECRET=${{ secrets.CHAINLIT_AUTH_SECRET }}" >> .env
+            # Write .env — all values required (validated above)
+            cat > .env <<'ENVEOF'
+            MONGODB_URI=${{ secrets.MONGODB_URI }}
+            GROQ_API_KEY=${{ secrets.GROQ_API_KEY }}
+            POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
+            POSTGRES_URI=postgresql://bi:${{ secrets.POSTGRES_PASSWORD }}@postgres:5432/bi_wikolabs
+            CHAINLIT_AUTH_SECRET=${{ secrets.CHAINLIT_AUTH_SECRET }}
+            ENVEOF
 
-            docker compose up -d --build
+            # Remove leading whitespace added by heredoc indentation
+            sed -i 's/^[[:space:]]*//' .env
 
-            sleep 8
+            # Start/rebuild containers; --remove-orphans cleans up old mongo container
+            docker compose up -d --build --remove-orphans
+
+            # Wait for app to be healthy (up to 60 s)
+            echo "Waiting for app to become healthy..."
+            for i in $(seq 1 12); do
+              if docker compose exec -T app python -c "import sys; sys.exit(0)" 2>/dev/null; then
+                echo "✅ App container is up."
+                break
+              fi
+              echo "  attempt $i/12 — sleeping 5s..."
+              sleep 5
+            done
+
+            # Seed demo data (optional — continues on failure)
             docker compose exec -T app python seed.py || true
 
-            echo "Deployment complete."
+            echo "✅ Deployment complete."
