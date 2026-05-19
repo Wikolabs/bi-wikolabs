@@ -17,7 +17,7 @@ jobs:
           [ -z "${{ secrets.GROQ_API_KEY }}"       ] && missing="$missing GROQ_API_KEY"
           [ -z "${{ secrets.POSTGRES_PASSWORD }}"  ] && missing="$missing POSTGRES_PASSWORD"
           [ -z "${{ secrets.MONGODB_URI }}"        ] && missing="$missing MONGODB_URI"
-          [ -z "${{ secrets.CHAINLIT_AUTH_SECRET }}"] && missing="$missing CHAINLIT_AUTH_SECRET"
+          [ -z "${{ secrets.CHAINLIT_AUTH_SECRET }}" ] && missing="$missing CHAINLIT_AUTH_SECRET"
           if [ -n "$missing" ]; then
             echo "❌ Missing required GitHub secrets:$missing"
             echo "   Go to: Settings → Secrets and variables → Actions → New repository secret"
