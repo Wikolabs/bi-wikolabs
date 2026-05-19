@@ -271,7 +271,7 @@ class PostgresDataLayer(BaseDataLayer):
                     createdAt=r["created_at"].isoformat(),
                     userId=r["user_id"],
                     userIdentifier=r["user_identifier"],
-                    metadata=dict(r["metadata"]) if r["metadata"] else {},
+                    metadata=_jsonb(r["metadata"]),
                     steps=[],
                     elements=[],
                     tags=list(r["tags"]) if r["tags"] else [],
