@@ -1,0 +1,42 @@
+[project]
+name = "bi-wikolabs"
+version = "0.1.0"
+description = "Generic BI Intelligence Agent — Chainlit + Groq + MongoDB + PostgreSQL/pgvector"
+requires-python = ">=3.12"
+
+dependencies = [
+    "chainlit>=2.0.0,<3.0.0",
+    "groq>=0.11.0",
+    "pymongo>=4.8.0",
+    "python-dotenv>=1.0.1",
+    "faker>=24.0.0",
+    "plotly>=5.0.0",
+    "pandas>=2.0.0",
+    "openpyxl>=3.1.0",
+    "fpdf2>=2.7.0",
+    # PostgreSQL + pgvector
+    "asyncpg>=0.29.0",
+    "pgvector>=0.3.0",
+    # Embeddings (ONNX runtime — no PyTorch needed)
+    "fastembed>=0.3.6",
+    # Structured LLM output
+    "instructor>=1.3.0",
+    # Scheduler for nightly schema refresh
+    "apscheduler>=3.10.0",
+]
+
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "bson",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths   = ["tests"]
+
+[build-system]
+requires      = ["hatchling"]
+build-backend = "hatchling.build"

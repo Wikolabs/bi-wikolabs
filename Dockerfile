@@ -1,9 +1,15 @@
 FROM python:3.12-slim
 
+# Install uv — much faster than pip, handles venv + lockfile
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy dependency manifests first (layer-cached until they change)
+COPY pyproject.toml uv.lock* ./
+
+# Install production deps into the system Python (no separate venv needed in Docker)
+RUN uv pip install --system --no-cache -r pyproject.toml
 
 COPY . .
 
