@@ -110,7 +110,7 @@ class PostgresDataLayer(BaseDataLayer):
                 VALUES ($1, $2, $3)
                 ON CONFLICT (identifier) DO NOTHING
                 """,
-                uid, user.identifier, user.metadata or {},
+                uid, user.identifier, json.dumps(user.metadata or {}),
             )
             row = await conn.fetchrow(
                 "SELECT * FROM chat_users WHERE identifier = $1", user.identifier
