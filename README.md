@@ -1,8 +1,16 @@
-# BI Wikolabs — Enterprise AI Business Intelligence Agent
+# BI Wikolabs — Agent BI en langage naturel
+
+> Posez vos questions business en français. Obtenez graphiques, analyses et rapports — sans SQL, sans analyste intermédiaire.
+
+[![Chainlit](https://img.shields.io/badge/Chainlit-1.x-FF6B35?style=flat)](https://chainlit.io)
+[![Groq](https://img.shields.io/badge/Groq-LLaMA_3.3_70B-FF6B35?style=flat)](https://groq.com)
+[![MongoDB](https://img.shields.io/badge/MongoDB-7-47A248?style=flat&logo=mongodb)](https://mongodb.com)
+[![pgvector](https://img.shields.io/badge/pgvector-0.3-336791?style=flat&logo=postgresql)](https://github.com/pgvector/pgvector)
 
 An enterprise-grade **natural language BI chatbot** powered by Groq LLM, MongoDB, and PostgreSQL+pgvector. Ask business questions in plain English and get instant insights, interactive charts, and exportable reports — no SQL or query language needed.
 
-**Live demo:** [bi.wikolabs.com](https://bi.wikolabs.com)
+**Live demo:** [bi.wikolabs.com](https://bi.wikolabs.com)  
+**Domaine :** Business Intelligence / Natural Language Querying / Data Analytics
 
 ---
 
@@ -790,6 +798,80 @@ Start with these files in order:
 
 ---
 
+## PRD
+
+### Problème
+Les équipes métier dépendent des équipes data pour obtenir des analyses : chaque question non-standard nécessite un ticket, une attente, et un aller-retour. Les managers ne peuvent pas requêter directement leur base MongoDB. Les outils BI classiques (Tableau, Power BI) nécessitent une formation et restent inaccessibles pour des questions ad-hoc en français.
+
+### Solution
+BI Wikolabs traduit les questions business en langage naturel en pipelines d'agrégation MongoDB valides, exécute les requêtes avec auto-correction, et retourne des analyses narratives avec graphiques Plotly interactifs — le tout en quelques secondes, sans SQL, sans formation.
+
+### Utilisateurs cibles
+| Persona | Besoin |
+|---------|--------|
+| CEO / Directeur | Réponses immédiates aux questions business sans passer par un analyste |
+| Responsable Commercial | Analyser le pipeline, les performances, les clients en autonomie |
+| Équipe Data | Réduire le volume de requêtes ad-hoc répétitives |
+
+### OKRs
+- Précision génération MQL : ≥ 90% (requêtes valides au premier essai)
+- Latence end-to-end : < 4 secondes par question
+- Taux auto-correction : -30% d'échecs sans intervention utilisateur
+
+---
+
+## User Stories
+
+```
+US-01 [CEO] En tant que CEO,
+      je veux poser la question "quel est notre chiffre d'affaires ce trimestre par région"
+      et obtenir un graphique interactif avec la réponse narrative
+      afin d'avoir une réponse immédiate sans attendre un rapport.
+
+US-02 [Commercial] En tant que responsable commercial,
+      je veux demander "quels sont nos 5 meilleurs clients par lifetime value"
+      et voir un tableau avec les détails de chaque compte
+      afin de prioriser mes efforts de fidélisation.
+
+US-03 [Manager] En tant que manager,
+      je veux poser une question de type "pourquoi le chiffre baisse dans le Sud"
+      et obtenir une analyse root-cause automatique
+      afin de comprendre les causes sans analyser manuellement les données.
+
+US-04 [Analyst] En tant qu'analyste data,
+      je veux valider une question/requête correcte comme "golden record"
+      pour qu'elle serve d'exemple few-shot pour les questions futures similaires
+      afin d'améliorer continuellement la précision du système.
+
+US-05 [Manager] En tant que manager,
+      je veux exporter les résultats en Excel ou PDF
+      pour les partager en réunion ou les archiver
+      afin de diffuser les insights sans accès à l'outil.
+```
+
+---
+
+## Règles métier
+
+| # | Règle | Description | Simulable UI |
+|---|-------|-------------|-------------|
+| R1 | Auto-correction MQL | Requête invalide → erreur renvoyée au LLM → re-génération (max 3 essais) | ✅ Retry display |
+| R2 | Steps parallèles | Entity resolution + Collection selection en asyncio.gather() (~500ms économisés) | ✅ Pipeline trace |
+| R3 | Schema dynamique | Noms de champs extraits live depuis MongoDB, jamais hardcodés | ✅ Schema view |
+| R4 | Golden records | Paire question/MQL validée → few-shot example pour prochaines queries similaires | ✅ Save golden |
+| R5 | Types de charts | None (KPI), barre horizontale (ranking), pie (2-10 catégories), barre groupée | ✅ Chart types |
+| R6 | WHY drill-down | Question "pourquoi" → 2ème requête MQL root-cause automatique | ✅ WHY query |
+| R7 | Compound split | "Montre X et aussi Y" → 2 requêtes parallèles + fusion résultats | ✅ Compound |
+| R8 | Entity resolution | Nom → ObjectId MongoDB (ex: "Acme Corp" → ObjectId("...")) | ✅ Entity map |
+| R9 | Export XLSX/PDF | Après tout résultat tabulaire, boutons Export apparaissent | ✅ Export buttons |
+| R10 | Smalltalk filter | Classification "smalltalk" → réponse directe sans requête DB | ✅ Greeting |
+
+---
+
 ## License
 
 Proprietary — Wikolabs. All rights reserved.
+
+---
+
+*Un produit [Wikolabs](https://wikolabs.com) — Intelligence artificielle appliquée aux métiers*
