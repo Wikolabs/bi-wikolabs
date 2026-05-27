@@ -1,7 +1,7 @@
 FROM python:3.12-slim
 
-# Install uv — much faster than pip, handles venv + lockfile
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+# Install uv
+RUN pip install uv --quiet
 
 WORKDIR /app
 ENV PYTHONPATH=/app
