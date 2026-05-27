@@ -52,21 +52,6 @@ services:
     networks:
       - bi_net
 
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-      - app_data:/srv/app_data:ro
-    networks:
-      - bi_net
-
 networks:
   bi_net:
 
@@ -75,5 +60,3 @@ volumes:
   mongo_data:
   app_data:
   model_cache:
-  caddy_data:
-  caddy_config:

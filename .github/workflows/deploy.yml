@@ -12,68 +12,68 @@ jobs:
       - name: Validate required secrets
         run: |
           missing=""
-          [ -z "${{ secrets.VPS_HOST }}"           ] && missing="$missing VPS_HOST"
-          [ -z "${{ secrets.SSH_PRIVATE_KEY }}"    ] && missing="$missing SSH_PRIVATE_KEY"
-          [ -z "${{ secrets.GROQ_API_KEY }}"       ] && missing="$missing GROQ_API_KEY"
-          [ -z "${{ secrets.POSTGRES_PASSWORD }}"  ] && missing="$missing POSTGRES_PASSWORD"
-          [ -z "${{ secrets.MONGODB_URI }}"        ] && missing="$missing MONGODB_URI"
-          [ -z "${{ secrets.CHAINLIT_AUTH_SECRET }}" ] && missing="$missing CHAINLIT_AUTH_SECRET"
+          [ -z "${{ secrets.WIKOLABS_VM_HOST }}"       ] && missing="$missing WIKOLABS_VM_HOST"
+          [ -z "${{ secrets.WIKOLABS_VM_SSH_KEY }}"    ] && missing="$missing WIKOLABS_VM_SSH_KEY"
+          [ -z "${{ secrets.WIKOLABS_VM_USER }}"       ] && missing="$missing WIKOLABS_VM_USER"
+          [ -z "${{ secrets.GROQ_API_KEY }}"           ] && missing="$missing GROQ_API_KEY"
+          [ -z "${{ secrets.POSTGRES_PASSWORD }}"      ] && missing="$missing POSTGRES_PASSWORD"
+          [ -z "${{ secrets.MONGODB_URI }}"            ] && missing="$missing MONGODB_URI"
+          [ -z "${{ secrets.CHAINLIT_AUTH_SECRET }}"   ] && missing="$missing CHAINLIT_AUTH_SECRET"
           if [ -n "$missing" ]; then
-            echo "❌ Missing required GitHub secrets:$missing"
-            echo "   Go to: Settings → Secrets and variables → Actions → New repository secret"
+            echo "Missing required GitHub secrets:$missing"
             exit 1
           fi
-          echo "✅ All required secrets present."
+          echo "All required secrets present."
 
-      - name: Deploy to VPS
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: root
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          script: |
+      - name: Deploy to VM via SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.WIKOLABS_VM_SSH_KEY }}
+          VM_HOST: ${{ secrets.WIKOLABS_VM_HOST }}
+          VM_USER: ${{ secrets.WIKOLABS_VM_USER }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          CHAINLIT_AUTH_SECRET: ${{ secrets.CHAINLIT_AUTH_SECRET }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "$VM_USER@$VM_HOST" \
+            "APP_DIR=/opt/bi-wikolabs
+            GROQ_API_KEY='$GROQ_API_KEY'
+            POSTGRES_PASSWORD='$POSTGRES_PASSWORD'
+            MONGODB_URI='$MONGODB_URI'
+            CHAINLIT_AUTH_SECRET='$CHAINLIT_AUTH_SECRET'
+
             set -e
-            APP_DIR=/opt/bi-wikolabs
 
-            # Clone on first deploy
-            if [ ! -d "$APP_DIR/.git" ]; then
-              git clone https://github.com/Wikolabs/bi-wikolabs.git $APP_DIR
+            if [ ! -d \"\$APP_DIR/.git\" ]; then
+              git clone https://github.com/Wikolabs/bi-wikolabs.git \$APP_DIR
             fi
 
-            cd $APP_DIR
+            cd \$APP_DIR
             git pull origin main
 
-            # Write .env — all values required (validated above)
-            cat > .env <<'ENVEOF'
-            MONGODB_URI=${{ secrets.MONGODB_URI }}
-            GROQ_API_KEY=${{ secrets.GROQ_API_KEY }}
-            POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
-            POSTGRES_URI=postgresql://bi:${{ secrets.POSTGRES_PASSWORD }}@postgres:5432/bi_wikolabs
-            CHAINLIT_AUTH_SECRET=${{ secrets.CHAINLIT_AUTH_SECRET }}
-            ENVEOF
+            cat > .env << EOF
+MONGODB_URI=\$MONGODB_URI
+GROQ_API_KEY=\$GROQ_API_KEY
+POSTGRES_PASSWORD=\$POSTGRES_PASSWORD
+POSTGRES_URI=postgresql://bi:\${POSTGRES_PASSWORD}@postgres:5432/bi_wikolabs
+CHAINLIT_AUTH_SECRET=\$CHAINLIT_AUTH_SECRET
+EOF
 
-            # Remove leading whitespace added by heredoc indentation
-            sed -i 's/^[[:space:]]*//' .env
-
-            # Start/rebuild containers; --remove-orphans cleans up old mongo container
             docker compose up -d --build --remove-orphans
 
-            # Restart Caddy so it re-resolves the 'app' service name on Docker's DNS.
-            # Without this, Caddy keeps stale DNS after the app container is rebuilt.
-            docker compose restart caddy
-
-            # Wait for app to be healthy (up to 60 s)
-            echo "Waiting for app to become healthy..."
-            for i in $(seq 1 12); do
-              if docker compose exec -T app python -c "import sys; sys.exit(0)" 2>/dev/null; then
-                echo "✅ App container is up."
+            echo 'Waiting for app...'
+            for i in \$(seq 1 12); do
+              if docker compose exec -T app python -c 'import sys; sys.exit(0)' 2>/dev/null; then
+                echo 'App is up.'
                 break
               fi
-              echo "  attempt $i/12 — sleeping 5s..."
               sleep 5
             done
 
-            # Seed demo data (optional — continues on failure)
             docker compose exec -T app python seed.py || true
-
-            echo "✅ Deployment complete."
+            echo 'Deployed bi-wikolabs on http://\$VM_HOST:8000'"
