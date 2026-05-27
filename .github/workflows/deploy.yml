@@ -40,32 +40,19 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "$VM_USER@$VM_HOST" \
-            "APP_DIR=/opt/bi-wikolabs
-            GROQ_API_KEY='$GROQ_API_KEY'
-            POSTGRES_PASSWORD='$POSTGRES_PASSWORD'
-            MONGODB_URI='$MONGODB_URI'
-            CHAINLIT_AUTH_SECRET='$CHAINLIT_AUTH_SECRET'
+          ENV_B64=$(printf 'MONGODB_URI=%s\nGROQ_API_KEY=%s\nPOSTGRES_PASSWORD=%s\nPOSTGRES_URI=postgresql://bi:%s@postgres:5432/bi_wikolabs\nCHAINLIT_AUTH_SECRET=%s\n' \
+            "$MONGODB_URI" "$GROQ_API_KEY" "$POSTGRES_PASSWORD" "$POSTGRES_PASSWORD" "$CHAINLIT_AUTH_SECRET" | base64 -w 0)
 
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "$VM_USER@$VM_HOST" "
             set -e
-
+            APP_DIR=/opt/bi-wikolabs
             if [ ! -d \"\$APP_DIR/.git\" ]; then
               git clone https://github.com/Wikolabs/bi-wikolabs.git \$APP_DIR
             fi
-
             cd \$APP_DIR
             git pull origin main
-
-            cat > .env << EOF
-MONGODB_URI=\$MONGODB_URI
-GROQ_API_KEY=\$GROQ_API_KEY
-POSTGRES_PASSWORD=\$POSTGRES_PASSWORD
-POSTGRES_URI=postgresql://bi:\${POSTGRES_PASSWORD}@postgres:5432/bi_wikolabs
-CHAINLIT_AUTH_SECRET=\$CHAINLIT_AUTH_SECRET
-EOF
-
+            printf '%s' \"$ENV_B64\" | base64 -d > .env
             docker compose up -d --build --remove-orphans
-
             echo 'Waiting for app...'
             for i in \$(seq 1 12); do
               if docker compose exec -T app python -c 'import sys; sys.exit(0)' 2>/dev/null; then
@@ -74,6 +61,6 @@ EOF
               fi
               sleep 5
             done
-
             docker compose exec -T app python seed.py || true
-            echo 'Deployed bi-wikolabs on http://\$VM_HOST:8000'"
+            echo 'Deployed bi-wikolabs on port 8000'
+          "
