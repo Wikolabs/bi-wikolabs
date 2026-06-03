@@ -337,7 +337,21 @@ class PostgresDataLayer(BaseDataLayer):
 
     async def create_step(self, step_dict: Dict) -> None:
         pool = await self._pool()
+        thread_id = step_dict.get("threadId")
         async with pool.acquire() as conn:
+            # Chainlit may emit step events before the thread row exists
+            # (update_thread arrives a few ms later). Insert a placeholder
+            # thread first so the FK constraint is satisfied. Real thread
+            # name/metadata land later via update_thread.
+            if thread_id:
+                await conn.execute(
+                    """
+                    INSERT INTO chat_threads (id, name, metadata, tags)
+                    VALUES ($1, 'New conversation', '{}'::jsonb, '[]'::jsonb)
+                    ON CONFLICT (id) DO NOTHING
+                    """,
+                    thread_id,
+                )
             await conn.execute(
                 """
                 INSERT INTO chat_steps
@@ -350,7 +364,7 @@ class PostgresDataLayer(BaseDataLayer):
                       metadata = EXCLUDED.metadata
                 """,
                 step_dict.get("id", str(uuid.uuid4())),
-                step_dict.get("threadId"),
+                thread_id,
                 step_dict.get("parentId"),
                 step_dict.get("type"),
                 step_dict.get("name"),
