@@ -40,7 +40,7 @@ services:
       - POSTGRES_URI=postgresql://bi:${POSTGRES_PASSWORD}@postgres:5432/bi_wikolabs
       - CHAINLIT_AUTH_SECRET
     ports:
-      - "8000:8000"
+      - "3046:8000"
     volumes:
       - app_data:/data
       - model_cache:/root/.cache/fastembed
