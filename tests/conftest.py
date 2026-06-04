@@ -1,4 +1,4 @@
-"""Shared fixtures and helpers for the test suite."""
+﻿"""Shared fixtures and helpers for the test suite."""
 
 import os
 
@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 @pytest.fixture
 def flat_docs():
-    """Simple flat documents — the most common shape."""
+    """Simple flat documents · the most common shape."""
     return [
         {"name": "Alice", "age": 30, "active": True,  "score": 4.5},
         {"name": "Bob",   "age": 25, "active": False, "score": 3.2},
@@ -88,7 +88,7 @@ def deeply_nested_docs():
 
 @pytest.fixture
 def enum_docs():
-    """String field with low cardinality — should be detected as enum."""
+    """String field with low cardinality · should be detected as enum."""
     statuses = ["completed", "pending", "cancelled", "refunded"]
     return [
         {"order_id": f"O{i}", "status": statuses[i % 4], "amount": i * 10.0}
@@ -98,7 +98,7 @@ def enum_docs():
 
 @pytest.fixture
 def high_cardinality_docs():
-    """String field with high cardinality — should NOT become enum."""
+    """String field with high cardinality · should NOT become enum."""
     return [
         {"email": f"user{i}@example.com", "score": i}
         for i in range(30)
@@ -107,7 +107,7 @@ def high_cardinality_docs():
 
 @pytest.fixture
 def empty_docs():
-    """Empty collection — no documents sampled."""
+    """Empty collection · no documents sampled."""
     return []
 
 
@@ -123,7 +123,7 @@ def unicode_docs():
 
 @pytest.fixture
 def many_fields_docs():
-    """Documents with 30+ fields — tests summary truncation."""
+    """Documents with 30+ fields · tests summary truncation."""
     return [
         {f"field_{i}": f"value_{i}" for i in range(35)}
         for _ in range(5)

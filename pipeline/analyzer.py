@@ -1,4 +1,4 @@
-"""Step 1: Query Analysis — classify the user question and extract entities.
+﻿"""Step 1: Query Analysis · classify the user question and extract entities.
 
 Uses instructor to guarantee a valid AnalysisResult Pydantic model is returned.
 Falls back to safe defaults if the LLM repeatedly fails validation.

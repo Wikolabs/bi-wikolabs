@@ -1,6 +1,6 @@
-"""Unit tests for pipeline/responder.py — DataFrame and chart building.
+﻿"""Unit tests for pipeline/responder.py · DataFrame and chart building.
 
-No LLM calls are made — only _build_dataframe() and _build_chart() are tested.
+No LLM calls are made · only _build_dataframe() and _build_chart() are tested.
 """
 
 import pytest
@@ -194,7 +194,7 @@ class TestBuildChart:
 
     def test_no_label_col_returns_none(self):
         df = self._df([{"revenue": 100, "cost": 50}])
-        # Both cols are metric words — label_column returns None
+        # Both cols are metric words · label_column returns None
         result = _build_chart("comparison", df, "cost vs revenue")
         # May or may not be None depending on label fallback; just check it doesn't crash
         assert result is None or isinstance(result, go.Figure)

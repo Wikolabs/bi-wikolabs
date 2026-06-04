@@ -1,4 +1,4 @@
-"""Schema Registry — extracts MongoDB schemas and stores them in PostgreSQL.
+﻿"""Schema Registry · extracts MongoDB schemas and stores them in PostgreSQL.
 
 Flow:
   refresh_collection(name)  →  sample client MongoDB  →  upsert into PostgreSQL
@@ -40,9 +40,9 @@ def _flatten(doc: dict, prefix: str = "") -> dict:
 
 def _type_name(value) -> str:
     from bson import ObjectId
-    # None must be first — isinstance(None, …) is always False but explicit is safer
+    # None must be first · isinstance(None, …) is always False but explicit is safer
     if value is None:               return "null"
-    # bool before int — in Python bool is a subclass of int
+    # bool before int · in Python bool is a subclass of int
     if isinstance(value, bool):     return "bool"
     if isinstance(value, int):      return "int"
     if isinstance(value, float):    return "float"
@@ -110,7 +110,7 @@ async def refresh_collection(collection_name: str, tenant_id: str = "default") -
         return
 
     if not docs:
-        logger.warning("Collection '%s' is empty — skipping.", collection_name)
+        logger.warning("Collection '%s' is empty · skipping.", collection_name)
         return
 
     fields = _extract_fields(docs)

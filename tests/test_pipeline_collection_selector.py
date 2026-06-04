@@ -1,4 +1,4 @@
-"""Unit tests for pipeline/collection_selector.py — 3-tier selection logic.
+﻿"""Unit tests for pipeline/collection_selector.py · 3-tier selection logic.
 
 All external dependencies (schema_registry, Groq) are mocked.
 """

@@ -1,4 +1,4 @@
-"""Export utilities — convert a pandas DataFrame to XLSX or PDF bytes."""
+﻿"""Export utilities · convert a pandas DataFrame to XLSX or PDF bytes."""
 
 import io
 from typing import Optional
@@ -48,7 +48,7 @@ def to_xlsx(df: pd.DataFrame, title: str = "Export") -> bytes:
                     max_len + 4, 50
                 )
         except ImportError:
-            pass  # openpyxl not available with styles — export without formatting
+            pass  # openpyxl not available with styles · export without formatting
 
     return buffer.getvalue()
 

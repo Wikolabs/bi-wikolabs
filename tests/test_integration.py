@@ -1,13 +1,13 @@
-"""Integration tests — 10 behavioural scenarios + dynamic schema validation.
+﻿"""Integration tests · 10 behavioural scenarios + dynamic schema validation.
 
 Strategy
 --------
 - MongoDB     : custom in-memory mock (no mongomock dependency)
 - Groq LLM    : mocked (analyze + MQL generation + narrative)
 - execute_with_retry : mocked (returns seeded result rows)
-- Schema extraction  : REAL — _extract_fields() runs on seeded docs every time
+- Schema extraction  : REAL · _extract_fields() runs on seeded docs every time
 - PostgreSQL helpers : redirected to real extraction results (no DB needed)
-- Chart generation   : REAL — _build_chart / _build_dataframe run as-is
+- Chart generation   : REAL · _build_chart / _build_dataframe run as-is
 
 This means the only things not exercised are actual LLM accuracy and
 real Mongo aggregation; everything else (selection, schema injection,
@@ -93,7 +93,7 @@ _EMPLOYEES = [
     for i in range(12)
 ]
 
-# Non-standard field names — proves schema extraction is 100% dynamic
+# Non-standard field names · proves schema extraction is 100% dynamic
 _SALES_CUSTOM = [
     {
         "_id": ObjectId(),
@@ -229,7 +229,7 @@ async def _run(
         return collections[:top_k]
 
     narrative_resp = MagicMock()
-    narrative_resp.choices[0].message.content = "Analysis complete — key insights below."
+    narrative_resp.choices[0].message.content = "Analysis complete · key insights below."
 
     with (
         patch("pipeline.orchestrator.get_client_db", return_value=_MockDB()),
@@ -249,7 +249,7 @@ async def _run(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Scenario 01 — Smalltalk
+# Scenario 01 · Smalltalk
 # ═════════════════════════════════════════════════════════════════════════════
 
 @pytest.mark.integration
@@ -275,7 +275,7 @@ class TestS01Smalltalk:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Scenario 02 — Metric: total revenue
+# Scenario 02 · Metric: total revenue
 # ═════════════════════════════════════════════════════════════════════════════
 
 @pytest.mark.integration
@@ -326,7 +326,7 @@ class TestS02MetricTotalRevenue:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Scenario 03 — Ranking: top 5 customers
+# Scenario 03 · Ranking: top 5 customers
 # ═════════════════════════════════════════════════════════════════════════════
 
 @pytest.mark.integration
@@ -375,7 +375,7 @@ class TestS03RankingTopCustomers:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Scenario 04 — Comparison + pie: revenue breakdown by region
+# Scenario 04 · Comparison + pie: revenue breakdown by region
 # ═════════════════════════════════════════════════════════════════════════════
 
 @pytest.mark.integration
@@ -419,7 +419,7 @@ class TestS04ComparisonPieRegion:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Scenario 05 — Comparison + grouped bar: multi-metric by segment
+# Scenario 05 · Comparison + grouped bar: multi-metric by segment
 # ═════════════════════════════════════════════════════════════════════════════
 
 @pytest.mark.integration
@@ -468,7 +468,7 @@ class TestS05ComparisonGroupedBar:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Scenario 06 — List: active customers (no numeric → no chart)
+# Scenario 06 · List: active customers (no numeric → no chart)
 # ═════════════════════════════════════════════════════════════════════════════
 
 @pytest.mark.integration
@@ -508,7 +508,7 @@ class TestS06ListNoChart:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Scenario 07 — Lookup: specific customer
+# Scenario 07 · Lookup: specific customer
 # ═════════════════════════════════════════════════════════════════════════════
 
 @pytest.mark.integration
@@ -549,7 +549,7 @@ class TestS07LookupCustomer:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Scenario 08 — Monthly trend (list + date grouping → vertical bar)
+# Scenario 08 · Monthly trend (list + date grouping → vertical bar)
 # ═════════════════════════════════════════════════════════════════════════════
 
 @pytest.mark.integration
@@ -596,7 +596,7 @@ class TestS08MonthlyTrend:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Scenario 09 — Cross-collection join: revenue by product category
+# Scenario 09 · Cross-collection join: revenue by product category
 # ═════════════════════════════════════════════════════════════════════════════
 
 @pytest.mark.integration
@@ -650,7 +650,7 @@ class TestS09JoinByCategory:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Scenario 10 — Dynamic schema: custom field names
+# Scenario 10 · Dynamic schema: custom field names
 # Proves that schema is ALWAYS extracted from MongoDB content,
 # never from the hardcoded _FALLBACK_SCHEMAS dict.
 # ═════════════════════════════════════════════════════════════════════════════
@@ -694,7 +694,7 @@ class TestS10DynamicSchema:
         assert fields["purchase_date"]["types"].get("date", 0) == 1.0
 
     def test_item_code_high_cardinality_not_enum(self):
-        """item_code has 20 distinct values — must NOT be flagged as enum."""
+        """item_code has 20 distinct values · must NOT be flagged as enum."""
         fields = _extract_fields(_SALES_CUSTOM)
         assert "item_code" in fields
         assert "enum" not in fields["item_code"]

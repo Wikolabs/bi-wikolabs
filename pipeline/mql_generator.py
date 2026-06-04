@@ -1,4 +1,4 @@
-"""Step 4: MQL Generation — build a MongoDB query from the analysis.
+﻿"""Step 4: MQL Generation · build a MongoDB query from the analysis.
 
 Improvements over the original:
 - instructor + Pydantic guarantees valid JSON output (auto-retries on parse failure)
@@ -30,7 +30,7 @@ MODEL = "llama-3.3-70b-versatile"
 
 _EXAMPLES: dict[str, str] = {
     "metric": """\
-Example — metric:
+Example · metric:
 Q: "What is the total revenue from completed orders?"
 → {"collection":"orders","operation":"aggregate","pipeline":[
   {"$match":{"status":"completed"}},
@@ -39,7 +39,7 @@ Q: "What is the total revenue from completed orders?"
 ]}""",
 
     "ranking": """\
-Example — ranking:
+Example · ranking:
 Q: "Top 5 products by revenue"
 → {"collection":"orders","operation":"aggregate","pipeline":[
   {"$match":{"status":"completed"}},
@@ -51,7 +51,7 @@ Q: "Top 5 products by revenue"
 ]}""",
 
     "comparison": """\
-Example — comparison:
+Example · comparison:
 Q: "Compare revenue by customer segment"
 → {"collection":"orders","operation":"aggregate","pipeline":[
   {"$match":{"status":"completed"}},
@@ -63,12 +63,12 @@ Q: "Compare revenue by customer segment"
 ]}""",
 
     "list": """\
-Example — list:
+Example · list:
 Q: "List all active products in Electronics"
 → {"collection":"products","operation":"find","filter":{"category":"Electronics","is_active":true},"limit":50}""",
 
     "lookup": """\
-Example — lookup (resolved entity):
+Example · lookup (resolved entity):
 Q: "Orders from Acme Corp" (resolved: customer_id = ObjectId abc123)
 → {"collection":"orders","operation":"aggregate","pipeline":[
   {"$match":{"customer_id":{"$oid":"abc123"}}},
@@ -127,7 +127,7 @@ def _entity_context(entity_map: dict) -> str:
     lines = ["RESOLVED ENTITIES (use these exact ObjectIds in filters):"]
     for original, info in entity_map.items():
         if not info.get("resolved"):
-            lines.append(f"  '{original}' → NOT FOUND — use regex filter on name field")
+            lines.append(f"  '{original}' → NOT FOUND · use regex filter on name field")
             continue
         etype, name, oid = info.get("type"), info.get("name", original), info.get("_id")
         if etype == "customer":
@@ -177,17 +177,17 @@ async def _build_system_prompt(
         "",
         "RULES:",
         "- Generate EXACTLY ONE MongoDB query for the specific question asked. Do not generate multiple queries.",
-        '- Use {"$oid":"..."} syntax for ObjectId fields — executor converts them automatically.',
+        '- Use {"$oid":"..."} syntax for ObjectId fields · executor converts them automatically.',
         "- Use $lookup + $unwind for joins; always match on _id fields.",
         "- Use aggregation pipelines for analytics (sums, averages, trends, rankings).",
         "- For date formatting use $dateToString with format '%Y-%m'.",
-        "- Do NOT use ISODate() — use plain ISO strings for $match date filters.",
+        "- Do NOT use ISODate() · use plain ISO strings for $match date filters.",
         "- In $project, always rename _id to a meaningful label (region, segment, month…).",
         "",
-        "OUTPUT FORMAT — aggregation:",
+        "OUTPUT FORMAT · aggregation:",
         '{"collection":"orders","operation":"aggregate","pipeline":[...]}',
         "",
-        "OUTPUT FORMAT — simple find:",
+        "OUTPUT FORMAT · simple find:",
         '{"collection":"customers","operation":"find","filter":{},"limit":20}',
         "",
         example,

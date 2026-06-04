@@ -1,4 +1,4 @@
-"""Golden Records — validated (question → MQL) pairs stored in PostgreSQL.
+﻿"""Golden Records · validated (question → MQL) pairs stored in PostgreSQL.
 
 Every time a user marks a query result as correct, we save the
 (question, MQL, collections) triple with its embedding. Future similar

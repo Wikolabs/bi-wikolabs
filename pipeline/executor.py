@@ -1,4 +1,4 @@
-"""Step 5: Execute & Validate with retry — run MQL and self-correct on failure."""
+﻿"""Step 5: Execute & Validate with retry · run MQL and self-correct on failure."""
 
 from bson import ObjectId
 

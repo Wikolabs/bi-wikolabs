@@ -1,13 +1,13 @@
-"""Tests for PostgresDataLayer — focused on list_threads robustness.
+﻿"""Tests for PostgresDataLayer · focused on list_threads robustness.
 
 Key scenarios:
-  1. TypedDict filters (Chainlit 1.x / plain dict) — bare .userId raises AttributeError
+  1. TypedDict filters (Chainlit 1.x / plain dict) · bare .userId raises AttributeError
      without the fix; must return a valid response.
-  2. Pydantic model filters (Chainlit 2.x) — normal attribute access.
-  3. Filters is None — must not crash.
-  4. DB pool failure — must return empty PaginatedResponse, never 500.
+  2. Pydantic model filters (Chainlit 2.x) · normal attribute access.
+  3. Filters is None · must not crash.
+  4. DB pool failure · must return empty PaginatedResponse, never 500.
   5. Returns correct thread count and respects page_size.
-  6. _step_dict helper — all required optional Chainlit 2.x fields present.
+  6. _step_dict helper · all required optional Chainlit 2.x fields present.
 
 Chainlit is mocked at sys.modules level so the test suite runs without installing it.
 """
@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 # ---------------------------------------------------------------------------
-# Chainlit stub — injected before data_layer is imported
+# Chainlit stub · injected before data_layer is imported
 # ---------------------------------------------------------------------------
 
 def _make_chainlit_stub():
@@ -136,12 +136,12 @@ def _thread_row(name="Test Thread", user_id=None, user_identifier="demo"):
 
 
 def _pagination_dict(first=20, cursor=None):
-    """Chainlit 1.x — plain dict (TypedDict)."""
+    """Chainlit 1.x · plain dict (TypedDict)."""
     return {"first": first, "cursor": cursor}
 
 
 def _pagination_model(first=20, cursor=None):
-    """Chainlit 2.x — Pydantic-like object with .first and .cursor."""
+    """Chainlit 2.x · Pydantic-like object with .first and .cursor."""
     m = MagicMock()
     m.first  = first
     m.cursor = cursor
@@ -149,12 +149,12 @@ def _pagination_model(first=20, cursor=None):
 
 
 def _filter_dict(user_id="demo-uuid"):
-    """Chainlit 1.x — plain dict. Bare .userId would raise AttributeError."""
+    """Chainlit 1.x · plain dict. Bare .userId would raise AttributeError."""
     return {"userId": user_id, "search": None, "feedback": None}
 
 
 def _filter_model(user_id="demo-uuid"):
-    """Chainlit 2.x — object with .userId attribute."""
+    """Chainlit 2.x · object with .userId attribute."""
     m = MagicMock()
     m.userId = user_id
     return m
@@ -163,7 +163,7 @@ def _filter_model(user_id="demo-uuid"):
 def _mock_pool(rows, cursor_ts=None):
     """Return a mock asyncpg Pool that yields `rows` from conn.fetch.
 
-    asyncpg uses `async with pool.acquire() as conn:` — pool.acquire() must be
+    asyncpg uses `async with pool.acquire() as conn:` · pool.acquire() must be
     a synchronous call that returns an async context manager (not a coroutine).
     """
     conn = AsyncMock()
@@ -186,7 +186,7 @@ def layer():
 
 
 # ---------------------------------------------------------------------------
-# list_threads — filter type compatibility
+# list_threads · filter type compatibility
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
@@ -212,7 +212,7 @@ async def test_model_filters_attribute_access_works(layer):
 
 @pytest.mark.asyncio
 async def test_none_filters_no_crash(layer):
-    """filters=None must not crash — user_id_filter defaults to None."""
+    """filters=None must not crash · user_id_filter defaults to None."""
     pool = _mock_pool([_thread_row()])
     with patch_pool(layer, pool):
         result = await layer.list_threads(_pagination_dict(), None)
@@ -220,12 +220,12 @@ async def test_none_filters_no_crash(layer):
 
 
 # ---------------------------------------------------------------------------
-# list_threads — no 500 on failure (the critical guarantee)
+# list_threads · no 500 on failure (the critical guarantee)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_db_pool_failure_returns_empty_not_500(layer):
-    """If the pool itself raises, list_threads must return empty — never propagate."""
+    """If the pool itself raises, list_threads must return empty · never propagate."""
     broken = AsyncMock(side_effect=Exception("connection refused"))
     with patch_pool(layer, broken, broken_pool=True):
         result = await layer.list_threads(_pagination_dict(), _filter_dict())
@@ -237,7 +237,7 @@ async def test_db_pool_failure_returns_empty_not_500(layer):
 
 @pytest.mark.asyncio
 async def test_sql_error_returns_empty_not_500(layer):
-    """If conn.fetch raises, still return empty response — never 500."""
+    """If conn.fetch raises, still return empty response · never 500."""
     conn = AsyncMock()
     conn.fetchval = AsyncMock(return_value=None)
     conn.fetch    = AsyncMock(side_effect=Exception("relation does not exist"))
@@ -254,7 +254,7 @@ async def test_sql_error_returns_empty_not_500(layer):
 
 
 # ---------------------------------------------------------------------------
-# list_threads — pagination correctness
+# list_threads · pagination correctness
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio

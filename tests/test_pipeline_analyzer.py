@@ -1,4 +1,4 @@
-"""Unit tests for pipeline/analyzer.py — question classification.
+﻿"""Unit tests for pipeline/analyzer.py · question classification.
 
 All LLM calls are mocked via unittest.mock; no network required.
 """
@@ -20,7 +20,7 @@ def _make_result(**kwargs) -> AnalysisResult:
     return AnalysisResult(**defaults)
 
 
-# ── analyze() — happy path per query type ─────────────────────────────────────
+# ── analyze() · happy path per query type ─────────────────────────────────────
 
 @pytest.mark.asyncio
 class TestAnalyzeQueryTypes:
@@ -93,7 +93,7 @@ class TestAnalyzeQueryTypes:
         assert out["is_why_question"] is True
 
 
-# ── analyze() — entity extraction ─────────────────────────────────────────────
+# ── analyze() · entity extraction ─────────────────────────────────────────────
 
 @pytest.mark.asyncio
 class TestAnalyzeEntities:
@@ -152,7 +152,7 @@ class TestAnalyzeEntities:
         assert out["entities"] == []
 
 
-# ── analyze() — fallback behavior ─────────────────────────────────────────────
+# ── analyze() · fallback behavior ─────────────────────────────────────────────
 
 @pytest.mark.asyncio
 class TestAnalyzeFallback:

@@ -1,4 +1,4 @@
-"""Step 6: Response Generation — narrative, optional Plotly figure, optional DataFrame."""
+﻿"""Step 6: Response Generation · narrative, optional Plotly figure, optional DataFrame."""
 
 import json
 import os
@@ -173,7 +173,7 @@ def _build_chart(
         )
         return fig
 
-    # ── Horizontal bar — ranking ───────────────────────────────────────────────
+    # ── Horizontal bar · ranking ───────────────────────────────────────────────
     if query_type == "ranking":
         metric_col = numeric_cols[0]
         df_sorted = df.sort_values(metric_col, ascending=True).tail(20)
@@ -194,7 +194,7 @@ def _build_chart(
         )
         return fig
 
-    # ── Grouped bar — comparison ───────────────────────────────────────────────
+    # ── Grouped bar · comparison ───────────────────────────────────────────────
     if query_type == "comparison":
         fig = go.Figure()
         for col in numeric_cols[:4]:
@@ -213,7 +213,7 @@ def _build_chart(
         )
         return fig
 
-    # ── Vertical bar — list / trend ────────────────────────────────────────────
+    # ── Vertical bar · list / trend ────────────────────────────────────────────
     metric_col = numeric_cols[0]
     df_plot = df.head(30)
     fig = go.Figure(

@@ -1,4 +1,4 @@
-"""Unit tests for pipeline/executor.py — MongoDB query execution and retry.
+﻿"""Unit tests for pipeline/executor.py · MongoDB query execution and retry.
 
 Uses a mock pymongo Database so no real MongoDB connection is needed.
 """
@@ -49,7 +49,7 @@ class TestConvertOids:
     def test_dict_with_dollar_key_not_oid_preserved(self):
         obj = {"$match": {"status": "completed"}}
         result = _convert_oids(obj)
-        # {"$match": ...} has more than one key would be wrong — but it IS one key
+        # {"$match": ...} has more than one key would be wrong · but it IS one key
         # however "$match" != "$oid" so it should NOT be converted
         assert result == {"$match": {"status": "completed"}}
 

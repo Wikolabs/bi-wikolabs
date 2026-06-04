@@ -1,4 +1,4 @@
-"""Chainlit entry point — chat handlers, export actions, golden record validation."""
+﻿"""Chainlit entry point · chat handlers, export actions, golden record validation."""
 
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ async def start():
     except Exception as exc:
         logger.warning("Schema refresh skipped: %s", exc)
 
-    # Start nightly cron (idempotent — safe to call multiple times)
+    # Start nightly cron (idempotent · safe to call multiple times)
     try:
         from scheduler import start as start_scheduler
         start_scheduler()
@@ -143,7 +143,7 @@ async def on_export_pdf(action: cl.Action):
 async def on_validate_result(action: cl.Action):
     valid = action.payload.get("valid", False)
     if not valid:
-        await cl.Message(content="Thanks for the feedback — this won't be used as a reference.").send()
+        await cl.Message(content="Thanks for the feedback · this won't be used as a reference.").send()
         return
 
     spec        = cl.user_session.get("last_spec")
@@ -162,7 +162,7 @@ async def on_validate_result(action: cl.Action):
         ).send()
     except Exception as exc:
         logger.error("Failed to save golden record: %s", exc)
-        await cl.Message(content="Could not save — please try again.").send()
+        await cl.Message(content="Could not save · please try again.").send()
 
 
 # ── Welcome message (dynamically built from live schema) ─────────────────────
@@ -206,7 +206,7 @@ Ask me anything about your business data in plain English.
 - *"Compare totals by category"*
 - *"List all records matching a condition"*
 
-Or describe any analysis — I'll build the query automatically.
+Or describe any analysis · I'll build the query automatically.
 """
     except Exception:
         return _WELCOME_FALLBACK

@@ -1,4 +1,4 @@
-"""APScheduler — nightly schema refresh cron job."""
+﻿"""APScheduler · nightly schema refresh cron job."""
 
 import logging
 
@@ -32,7 +32,7 @@ def start() -> None:
     )
 
     scheduler.start()
-    logger.info("Scheduler started — nightly schema refresh at 02:00 UTC")
+    logger.info("Scheduler started · nightly schema refresh at 02:00 UTC")
 
 
 def stop() -> None:

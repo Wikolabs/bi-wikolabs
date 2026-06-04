@@ -1,7 +1,7 @@
-"""Step 3: Collection Selection — find relevant MongoDB collections.
+﻿"""Step 3: Collection Selection · find relevant MongoDB collections.
 
 Priority order:
-  1. pgvector semantic search on schema embeddings  (best — uses real schema)
+  1. pgvector semantic search on schema embeddings  (best · uses real schema)
   2. LLM call with live schema summaries             (fallback if vectors missing)
   3. Keyword matching                                (final fallback, always works)
 """

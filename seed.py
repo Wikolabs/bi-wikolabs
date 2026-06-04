@@ -1,6 +1,6 @@
-"""Seed BI Wikolabs with realistic enterprise demo data.
+﻿"""Seed BI Wikolabs with realistic enterprise demo data.
 
-Always drops and reseeds — run unconditionally to get a fresh state.
+Always drops and reseeds · run unconditionally to get a fresh state.
 7 collections: suppliers, products, customers, contacts, employees, orders, transactions.
 All cross-references use ObjectId.
 """
@@ -580,7 +580,7 @@ def seed_transactions(employees: list[dict], customers: list[dict],
                 "customer_id": None,
                 "order_id":    None,
                 "employee_id": emp["_id"],
-                "description": f"Monthly payroll — {emp['name']}",
+                "description": f"Monthly payroll · {emp['name']}",
             })
 
     # Operating expenses

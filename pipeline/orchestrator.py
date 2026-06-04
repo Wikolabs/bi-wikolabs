@@ -1,4 +1,4 @@
-"""Orchestrator — coordinates all pipeline steps.
+﻿"""Orchestrator · coordinates all pipeline steps.
 
 run() now returns a 5-tuple:
   (narrative, figure, dataframe, last_spec, last_collections)
@@ -138,7 +138,7 @@ async def _run_single(question: str, db) -> tuple[list, dict, list[str]]:
                                        collections=collections, entity_map=entity_map, db=db)
 
     if analysis.get("is_why_question") and results:
-        drill_q = f"Why: {question} — context: {results[:5]}"
+        drill_q = f"Why: {question} · context: {results[:5]}"
         drill_a = {**analysis, "is_why_question": False, "query_type": "comparison"}
         drill_spec = await generate(question=drill_q, analysis=drill_a,
                                     collections=collections, entity_map=entity_map)
@@ -214,7 +214,7 @@ async def run(
                                            collections=collections, entity_map=entity_map, db=db)
 
         if analysis.get("is_why_question") and results:
-            drill_q = f"Why: {question} — context: {results[:5]}"
+            drill_q = f"Why: {question} · context: {results[:5]}"
             drill_a = {**analysis, "is_why_question": False, "query_type": "comparison"}
             drill_spec = await generate(question=drill_q, analysis=drill_a,
                                         collections=collections, entity_map=entity_map)

@@ -1,4 +1,4 @@
-"""Step 2: Entity Resolution — resolve entity names to MongoDB _id ObjectIds."""
+﻿"""Step 2: Entity Resolution · resolve entity names to MongoDB _id ObjectIds."""
 
 import re
 from typing import Any

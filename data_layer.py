@@ -1,4 +1,4 @@
-"""PostgreSQL-backed data layer for Chainlit thread history.
+﻿"""PostgreSQL-backed data layer for Chainlit thread history.
 
 Key design decisions vs the old SQLiteDataLayer:
 - Always pass JSONB columns as json.dumps() strings with explicit ::jsonb cast in SQL.
@@ -200,7 +200,7 @@ class PostgresDataLayer(BaseDataLayer):
             return await self._list_threads_impl(pagination, filters)
         except Exception:
             log.error("list_threads failed:\n%s", tb.format_exc())
-            # Return empty response rather than propagating — avoids 500 on the sidebar
+            # Return empty response rather than propagating · avoids 500 on the sidebar
             return PaginatedResponse(
                 data=[],
                 pageInfo=PageInfo(hasNextPage=False, startCursor=None, endCursor=None),
@@ -320,7 +320,7 @@ class PostgresDataLayer(BaseDataLayer):
         )
 
     async def get_thread_author(self, thread_id: str) -> Optional[str]:
-        """Return the user identifier (e.g. 'demo') for auth checks — NOT the UUID."""
+        """Return the user identifier (e.g. 'demo') for auth checks · NOT the UUID."""
         pool = await self._pool()
         async with pool.acquire() as conn:
             return await conn.fetchval(

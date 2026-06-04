@@ -1,4 +1,4 @@
-"""Unit tests for schema extraction logic (no DB, no network required).
+﻿"""Unit tests for schema extraction logic (no DB, no network required).
 
 Tests _flatten, _type_name, _extract_fields, _build_summary with every
 MongoDB document shape a client could have.
@@ -25,7 +25,7 @@ class TestTypeName:
         assert _type_name(False) == "bool"
 
     def test_bool_not_confused_with_int(self):
-        # In Python, isinstance(True, int) is True — must check bool first
+        # In Python, isinstance(True, int) is True · must check bool first
         assert _type_name(True)  == "bool"
         assert _type_name(1)     == "int"
         assert _type_name(0)     == "int"
@@ -263,7 +263,7 @@ class TestBuildSummary:
 
 class TestEdgeCases:
     def test_boolean_distinguished_from_zero(self):
-        """Python: isinstance(False, int) is True — we must not tag False as int."""
+        """Python: isinstance(False, int) is True · we must not tag False as int."""
         docs = [{"flag": False}, {"flag": True}, {"flag": True}]
         fields = _extract_fields(docs)
         types = fields["flag"]["types"]
